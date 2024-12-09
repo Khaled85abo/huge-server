@@ -6,6 +6,18 @@ from app.logging.logger import logger
 import time
 from app.websocket.connection_manager import manager
 
+
+
+# Why read in chunks?
+# - Windows is not as efficient with large file transfers
+# - Reading in chunks allows us to update the progress bar more frequently
+# - Reading in chunks allows us to handle errors more gracefully
+CHUNK_SIZES = {
+    'small': 32768,
+    'medium': 65536,
+    'large': 131072
+}
+
 async def windows_transfer(transfer_data, server_configs, identity_file):
     """Windows-specific implementation using paramiko"""
     try:
@@ -92,8 +104,8 @@ async def windows_transfer(transfer_data, server_configs, identity_file):
         bytes_transferred = 0
 
         # Create destination directory
-        mkdir_command = f"mkdir -p {Path(dest).parent}"
-        dest_ssh.exec_command(mkdir_command)
+        # mkdir_command = f"mkdir -p {Path(dest).parent}"
+        # dest_ssh.exec_command(mkdir_command)
 
         # Create progress callback for single file transfer
         callback = create_progress_callback(
@@ -110,7 +122,7 @@ async def windows_transfer(transfer_data, server_configs, identity_file):
             with source_sftp.file(source_archive, 'rb') as source_fh:
                 with dest_sftp.file(dest_archive, 'wb') as dest_fh:
                     while True:
-                        data = source_fh.read(32768)
+                        data = source_fh.read(CHUNK_SIZES['small'])
                         if not data:
                             break
                         dest_fh.write(data)
@@ -120,9 +132,10 @@ async def windows_transfer(transfer_data, server_configs, identity_file):
             raise
 
         # Unzip on destination server
-        logger.info("Unzipping file on destination server")
+        logger.info("Untarring file on destination server")
         # Untar on destination server
-        untar_command = f"cd {Path(dest).parent} && tar -xzf {dest_archive} && rm {dest_archive}"
+        # untar_command = f"cd {Path(dest).parent} && tar -xzf {dest_archive} && rm {dest_archive}"
+        untar_command = f"cd / && tar -xzf {dest_archive} && rm {dest_archive}"
         stdin, stdout, stderr = dest_ssh.exec_command(untar_command)
         if stderr.read():
             raise Exception(f"Failed to untar file: {stderr.read().decode()}")
