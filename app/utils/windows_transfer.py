@@ -50,70 +50,88 @@ async def windows_transfer(transfer_data, server_configs, identity_file):
         dest_sftp = dest_ssh.open_sftp()
         logger.info("SFTP connections established")
         
-        # Get total size
-        size_command = f"du -sb {source}"
-        logger.info(f"Getting total size with command: {size_command}")
+        # Use tar instead of zip
+        source_archive = f"{source}.tar.gz"
+        dest_archive = f"{dest}.tar.gz"
+        
+        # Create tar archive
+        logger.info(f"Creating tar archive: {source_archive}")
+        source_parent = str(Path(source).parent).replace('\\', '/')  # Ensure forward slashes
+        source_name = Path(source).name
+        tar_command = f"cd '{source_parent}' && tar -czf '{source_archive}' '{source_name}'"
+        
+        logger.info(f"Executing command: {tar_command}")  # Add this for debugging
+        stdin, stdout, stderr = source_ssh.exec_command(tar_command)
+        
+        tar_error = stderr.read().decode()
+        tar_output = stdout.read().decode()
+        logger.info(f"Tar command output: {tar_output}")
+        if tar_error:
+            logger.error(f"Tar command error: {tar_error}")
+            raise Exception(f"Failed to create tar archive: {tar_error}")
+        
+        # Get file size (using Linux-compatible stat command)
+        size_command = f"stat -c%s '{source_archive}'"
         stdin, stdout, stderr = source_ssh.exec_command(size_command)
-        total_bytes = int(stdout.read().decode().split()[0])
-        logger.info(f"Total bytes to transfer: {total_bytes}")
+        size_output = stdout.read().decode().strip()
+        size_error = stderr.read().decode()
         
-        # Get list of files
-        find_command = f"find {source} -type f"
-        logger.info(f"Getting file list with command: {find_command}")
-        stdin, stdout, stderr = source_ssh.exec_command(find_command)
-        files_to_transfer = stdout.read().decode().split('\n')
-        files_to_transfer = [f for f in files_to_transfer if f]
-        logger.info(f"Found {len(files_to_transfer)} files to transfer")
+        if size_error:
+            logger.error(f"Error getting file size: {size_error}")
+            raise Exception(f"Failed to get archive size: {size_error}")
         
+        if not size_output:
+            logger.error("File size command returned empty output")
+            raise Exception("Failed to get archive size: empty output")
+            
+        total_bytes = int(size_output)
+        logger.info(f"Archive file size: {total_bytes} bytes")
+
         # Initialize transfer tracking
         start_time = time.time()
         bytes_transferred = 0
-        
-        for source_file in files_to_transfer:
-            # Calculate paths
-            rel_path = Path(source_file).relative_to(source)
-            dest_file = str(Path(dest) / rel_path).replace('\\', '/')
-            current_file = source_file
-            
-            logger.info(f"Processing file: {source_file} -> {dest_file}")
-            
-            # Create destination directory on dest server
-            dest_dir = str(Path(dest_file).parent).replace('\\', '/')
-            mkdir_command = f"mkdir -p {dest_dir}"
-            logger.info(f"Creating directory on destination: {mkdir_command}")
-            stdin, stdout, stderr = dest_ssh.exec_command(mkdir_command)
-            
-            # Get file size
-            file_attr = source_sftp.stat(source_file)
-            file_size = file_attr.st_size
-            logger.info(f"File size: {file_size} bytes")
-            
-            # Create progress callback
-            callback = create_progress_callback(
-                user_id=user_id,
-                total_bytes=total_bytes,
-                current_file=current_file,
-                start_time=start_time,
-                bytes_transferred=bytes_transferred
-            )
-            
-            # Transfer file from source to destination
-            logger.info(f"Starting transfer of: {source_file}")
-            try:
-                # Create a temporary file for transfer
-                with source_sftp.file(source_file, 'rb') as source_fh:
-                    with dest_sftp.file(dest_file, 'wb') as dest_fh:
-                        while True:
-                            data = source_fh.read(32768)  # Read in 32KB chunks
-                            if not data:
-                                break
-                            dest_fh.write(data)
-                            callback(len(data), file_size)
-                logger.info(f"Successfully transferred: {source_file}")
-            except Exception as e:
-                logger.error(f"Error transferring {source_file}: {str(e)}")
-                raise
-        
+
+        # Create destination directory
+        mkdir_command = f"mkdir -p {Path(dest).parent}"
+        dest_ssh.exec_command(mkdir_command)
+
+        # Create progress callback for single file transfer
+        callback = create_progress_callback(
+            user_id=user_id,
+            total_bytes=total_bytes,
+            current_file=source_archive,
+            start_time=start_time,
+            bytes_transferred=bytes_transferred
+        )
+
+        # Transfer the zip file
+        logger.info(f"Transferring zip file to destination")
+        try:
+            with source_sftp.file(source_archive, 'rb') as source_fh:
+                with dest_sftp.file(dest_archive, 'wb') as dest_fh:
+                    while True:
+                        data = source_fh.read(32768)
+                        if not data:
+                            break
+                        dest_fh.write(data)
+                        callback(len(data), total_bytes)
+        except Exception as e:
+            logger.error(f"Error transferring zip file: {str(e)}")
+            raise
+
+        # Unzip on destination server
+        logger.info("Unzipping file on destination server")
+        # Untar on destination server
+        untar_command = f"cd {Path(dest).parent} && tar -xzf {dest_archive} && rm {dest_archive}"
+        stdin, stdout, stderr = dest_ssh.exec_command(untar_command)
+        if stderr.read():
+            raise Exception(f"Failed to untar file: {stderr.read().decode()}")
+
+        # Clean up zip file on source server
+        logger.info("Cleaning up source zip file")
+        cleanup_command = f"rm {source_archive}"
+        source_ssh.exec_command(cleanup_command)
+
         logger.info("All files transferred successfully")
         
         # Close connections
