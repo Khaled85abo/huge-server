@@ -8,7 +8,7 @@ import time
 import re
 from app.logging.logger import logger
 import platform
-from app.utils.windows_transfer import windows_transfer
+from app.utils.windows_transfer import windows_tar_transfer, windows_files_transfer
 from app.utils.linux_transfer import linux_transfer
 
 router = APIRouter()
@@ -74,7 +74,7 @@ async def test_transfer_direct(request: TransferRequest):
     try:
         # Check operating system and use appropriate transfer method
         if platform.system() == 'Windows':
-            result = await windows_transfer(transfer_data, SERVER_CONFIGS, IDENTITY_FILE)
+            result = await windows_tar_transfer(transfer_data, SERVER_CONFIGS, IDENTITY_FILE)
         else:
             result = await linux_transfer(transfer_data, SERVER_CONFIGS, IDENTITY_FILE)
             
