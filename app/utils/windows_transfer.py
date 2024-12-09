@@ -3,6 +3,8 @@ import asyncio
 from pathlib import Path
 import paramiko
 from app.logging.logger import logger
+import time
+from app.websocket.connection_manager import manager
 
 async def windows_transfer(transfer_data, server_configs, identity_file):
     """Windows-specific implementation using paramiko"""
@@ -40,8 +42,65 @@ async def windows_transfer(transfer_data, server_configs, identity_file):
         sftp = ssh.open_sftp()
         logger.info("SFTP connection established")
         
-        # TODO: Implement the actual transfer logic here
-        logger.info("Transfer logic not yet implemented")
+        # Initialize transfer tracking variables
+        start_time = time.time()
+        bytes_transferred = 0
+        
+        # Define progress callback
+        def progress_callback(bytes_so_far, total_bytes):
+            nonlocal bytes_transferred, start_time
+            bytes_transferred = bytes_so_far
+            
+            # Calculate progress percentage
+            progress = int((bytes_transferred / total_bytes) * 100)
+            
+            # Calculate estimated time remaining
+            elapsed_time = time.time() - start_time
+            if bytes_transferred > 0:
+                transfer_rate = bytes_transferred / elapsed_time
+                remaining_bytes = total_bytes - bytes_transferred
+                estimated_seconds = remaining_bytes / transfer_rate if transfer_rate > 0 else 0
+            else:
+                estimated_seconds = 0
+                
+            # Send progress update
+            asyncio.create_task(
+                manager.broadcast_to_user(
+                    transfer_data['user_id'],
+                    {
+                        "type": "transfer_progress",
+                        "progress": progress,
+                        "current_file": transfer_data['source_storage'],
+                        "bytes_transferred": bytes_transferred,
+                        "total_bytes": total_bytes,
+                        "estimated_time_remaining": int(estimated_seconds),
+                        "error": None
+                    }
+                )
+            )
+        
+        # Perform the transfer
+        logger.info("Starting file transfer...")
+        sftp.get(
+            transfer_data['source_storage'],
+            transfer_data['dest_storage'],
+            callback=progress_callback
+        )
+        logger.info("File transfer completed")
+        
+        # Send final progress update
+        await manager.broadcast_to_user(
+            transfer_data['user_id'],
+            {
+                "type": "transfer_progress",
+                "progress": 100,
+                "current_file": "Complete",
+                "bytes_transferred": total_bytes,
+                "total_bytes": total_bytes,
+                "estimated_time_remaining": 0,
+                "error": None
+            }
+        )
         
         ssh.close()
         logger.info("SSH connection closed")
@@ -55,4 +114,13 @@ async def windows_transfer(transfer_data, server_configs, identity_file):
         
     except Exception as e:
         logger.error(f"Windows transfer failed with error: {str(e)}")
+        # Send error progress update
+        await manager.broadcast_to_user(
+            transfer_data['user_id'],
+            {
+                "type": "transfer_progress",
+                "progress": -1,
+                "error": str(e)
+            }
+        )
         raise Exception(f"Windows transfer failed: {str(e)}")
