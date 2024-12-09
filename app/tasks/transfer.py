@@ -8,6 +8,7 @@ import re
 import time
 from app.logging.logger import logger
 from app.websocket.connection_manager import manager
+from asgiref.sync import async_to_sync
 
 # Define server configurations
 SERVER_CONFIGS = {
@@ -15,7 +16,7 @@ SERVER_CONFIGS = {
         'host': '192.168.1.242', # This will be replace by MAX IV IP address
         'user': 'khaled',  # Assuming default Raspberry Pi username
     },
-    'pisma': {
+    'pisms': {
         'host': '192.168.1.66', # This will be replace by ICE IP address
         'user': 'khaled',
     }
@@ -37,12 +38,12 @@ def transfer(transfer_data: dict) -> dict:
         size_cmd = [
             'ssh', 
             '-i', str(IDENTITY_FILE),
-            f"{SERVER_CONFIGS['pimaster']['user']}@{SERVER_CONFIGS['pimaster']['host']}", 
+            f"{SERVER_CONFIGS['pisms']['user']}@{SERVER_CONFIGS['pisms']['host']}", 
             f"du -sb {source}"
         ]
         size_output = subprocess.check_output(size_cmd, text=True)
         total_bytes = int(size_output.split()[0])
-        
+        print(f"Total bytes: {total_bytes}")
         # Construct rsync command with itemize changes
         rsync_cmd = [
             'rsync',
@@ -51,9 +52,10 @@ def transfer(transfer_data: dict) -> dict:
             '--stats',
             '--itemize-changes',
             '-e', f'ssh -i {IDENTITY_FILE}',
-            f"{SERVER_CONFIGS['pimaster']['user']}@{SERVER_CONFIGS['pimaster']['host']}:{source}",
-            f"{SERVER_CONFIGS['pisma']['user']}@{SERVER_CONFIGS['pisma']['host']}:{dest}"
+            f"{SERVER_CONFIGS['pisms']['user']}@{SERVER_CONFIGS['pisms']['host']}:{source}",
+            f"{SERVER_CONFIGS['pimaster']['user']}@{SERVER_CONFIGS['pimaster']['host']}:{dest}"
         ]
+        print(f"Rsync command: {rsync_cmd}")
         
         process = subprocess.Popen(
             rsync_cmd,
@@ -93,14 +95,14 @@ def transfer(transfer_data: dict) -> dict:
                             estimated_seconds = 0
 
                         # Send progress update
-                        asyncio.run(send_progress_update(
+                        async_to_sync(send_progress_update)(
                             user_id=user_id,
                             progress=progress,
                             current_file=current_file,
                             bytes_transferred=bytes_transferred,
                             total_bytes=total_bytes,
                             estimated_time=int(estimated_seconds)
-                        ))
+                        )
                 
                 elif output.startswith('>f'):
                     # New file being transferred
@@ -110,14 +112,14 @@ def transfer(transfer_data: dict) -> dict:
         if process.returncode == 0:
             logger.info("Transfer completed successfully")
             # Send final progress update
-            asyncio.run(send_progress_update(
+            async_to_sync(send_progress_update)(
                 user_id=user_id,
                 progress=100,
                 current_file="Complete",
                 bytes_transferred=total_bytes,
                 total_bytes=total_bytes,
                 estimated_time=0
-            ))
+            )
             return {
                 "status": "completed",
                 "message": "Repository transfer successful",
@@ -130,11 +132,11 @@ def transfer(transfer_data: dict) -> dict:
     except Exception as e:
         error_msg = f"Transfer failed: {str(e)}"
         logger.error(error_msg)
-        asyncio.run(send_progress_update(
+        async_to_sync(send_progress_update)(
             user_id=user_id,
             progress=-1,
             error=str(e)
-        ))
+        )
         return {
             "status": "failed",
             "message": error_msg,
