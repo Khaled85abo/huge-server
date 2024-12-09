@@ -7,6 +7,9 @@ from pathlib import Path
 import time
 import re
 from app.logging.logger import logger
+import platform
+from app.utils.windows_transfer import windows_transfer
+from app.utils.linux_transfer import linux_transfer
 
 router = APIRouter()
 
@@ -40,29 +43,6 @@ async def transfer_repository(request: TransferRequest):
         "status": "pending"
     }
 
-@router.post("/sync")
-async def transfer_repository_sync(request: TransferRequest):
-    if request.source_storage == "":
-        raise HTTPException(status_code=400, detail="Source storage is required")
-    if request.dest_storage == "":
-        raise HTTPException(status_code=400, detail="Destination storage is required")
-    
-    # Create transfer data dictionary
-    transfer_data = {
-        "source_storage": request.source_storage,
-        "dest_storage": request.dest_storage,
-        "user_id": 1  # You can modify this or add it to the request model if needed
-    }
-
-    # Call transfer function directly instead of using delay()
-    result = transfer(transfer_data)
-    
-    # return {
-    #     "message": "Transfer completed",
-    #     "result": result,
-    #     "status": result.get("status", "unknown")
-    # }
-
 # Define server configurations (copy from transfer.py)
 SERVER_CONFIGS = {
     'pimaster': {
@@ -80,8 +60,6 @@ IDENTITY_FILE = Path(__file__).parent.parent / 'identityFile' / 'id_rsa'
 @router.post("/test")
 async def test_transfer_direct(request: TransferRequest):
     """Test endpoint that performs transfer directly without Celery"""
-    if request.source_storage == request.dest_storage:
-        raise HTTPException(status_code=400, detail="Source and destination storages cannot be the same")
     if request.source_storage == "":
         raise HTTPException(status_code=400, detail="Source storage is required")
     if request.dest_storage == "":
@@ -94,84 +72,14 @@ async def test_transfer_direct(request: TransferRequest):
     }
 
     try:
-        # First, get total size for estimation
-        size_cmd = [
-            'ssh',
-            '-i', str(IDENTITY_FILE),
-            '-o', 'StrictHostKeyChecking=no',
-            '-o', 'UserKnownHostsFile=/dev/null',
-            f"{SERVER_CONFIGS['pisms']['user']}@{SERVER_CONFIGS['pisms']['host']}",
-            f"du -sb {transfer_data['source_storage']}"
-        ]
-        
-        logger.info(f"Running size command: {' '.join(size_cmd)}")
-        size_output = subprocess.check_output(size_cmd, text=True)
-        total_bytes = int(size_output.split()[0])
-        logger.info(f"Total bytes: {total_bytes}")
-
-        # Construct rsync command
-        rsync_cmd = [
-            'rsync',
-            '-avz',
-            '--progress',
-            '--stats',
-            '--itemize-changes',
-            '-e', f'ssh -i {IDENTITY_FILE} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null',
-            f"{SERVER_CONFIGS['pisms']['user']}@{SERVER_CONFIGS['pisms']['host']}:{transfer_data['source_storage']}",
-            f"{SERVER_CONFIGS['pimaster']['user']}@{SERVER_CONFIGS['pimaster']['host']}:{transfer_data['dest_storage']}"
-        ]
-        
-        logger.info(f"Running rsync command: {' '.join(rsync_cmd)}")
-        process = subprocess.Popen(
-            rsync_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            universal_newlines=True,
-            bufsize=1
-        )
-
-        start_time = time.time()
-        bytes_transferred = 0
-        current_file = ""
-        
-        while True:
-            output = process.stdout.readline()
-            if output == '' and process.poll() is not None:
-                break
-                
-            if output:
-                logger.info(f"Rsync output: {output.strip()}")
-                # Log different types of rsync output
-                if 'to-check=' in output:
-                    # Progress line
-                    matches = re.search(r'(\d+(?:,\d+)*)\s+(\d+)%\s+([\d.]+\w+/s)', output)
-                    if matches:
-                        bytes_str = matches.group(1).replace(',', '')
-                        bytes_transferred = int(bytes_str)
-                        progress = int((bytes_transferred / total_bytes) * 100)
-                        logger.info(f"Progress: {progress}%")
-                
-                elif output.startswith('>f'):
-                    # New file being transferred
-                    current_file = output.split()[-1]
-                    logger.info(f"Transferring file: {current_file}")
-
-        if process.returncode == 0:
-            logger.info("Transfer completed successfully")
-            return {
-                "status": "completed",
-                "message": "Repository transfer successful",
-                "source": transfer_data['source_storage'],
-                "destination": transfer_data['dest_storage']
-            }
+        # Check operating system and use appropriate transfer method
+        if platform.system() == 'Windows':
+            result = await windows_transfer(transfer_data, SERVER_CONFIGS, IDENTITY_FILE)
         else:
-            error = process.stderr.read()
-            raise HTTPException(status_code=500, detail=f"Transfer failed: {error}")
+            result = await linux_transfer(transfer_data, SERVER_CONFIGS, IDENTITY_FILE)
             
-    except subprocess.CalledProcessError as e:
-        error_msg = f"Command failed: {e.output}"
-        logger.error(error_msg)
-        raise HTTPException(status_code=500, detail=error_msg)
+        return result
+
     except Exception as e:
         error_msg = f"Transfer failed: {str(e)}"
         logger.error(error_msg)
