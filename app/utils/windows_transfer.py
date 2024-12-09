@@ -131,14 +131,27 @@ async def windows_transfer(transfer_data, server_configs, identity_file):
             logger.error(f"Error transferring zip file: {str(e)}")
             raise
 
-        # Unzip on destination server
+        # Untar directly to the destination location
         logger.info("Untarring file on destination server")
-        # Untar on destination server
-        # untar_command = f"cd {Path(dest).parent} && tar -xzf {dest_archive} && rm {dest_archive}"
-        untar_command = f"cd / && tar -xzf {dest_archive} && rm {dest_archive}"
+        dest_parent = str(Path(dest).parent).replace('\\', '/')
+        untar_command = f"cd '{dest_parent}' && tar -xzf '{dest_archive}'"
+        
+        logger.info(f"Executing untar command: {untar_command}")
         stdin, stdout, stderr = dest_ssh.exec_command(untar_command)
-        if stderr.read():
-            raise Exception(f"Failed to untar file: {stderr.read().decode()}")
+        
+        # Get command output and error
+        untar_error = stderr.read().decode()
+        untar_output = stdout.read().decode()
+        
+        logger.info(f"Untar command output: {untar_output}")
+        if untar_error:
+            logger.error(f"Untar command error: {untar_error}")
+            raise Exception(f"Failed to untar file: {untar_error}")
+            
+        # Remove the archive after successful extraction
+        logger.info("Removing archive file")
+        rm_command = f"rm '{dest_archive}'"
+        dest_ssh.exec_command(rm_command)
 
         # Clean up zip file on source server
         logger.info("Cleaning up source zip file")
