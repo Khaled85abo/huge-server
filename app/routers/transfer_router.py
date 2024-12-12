@@ -51,6 +51,7 @@ async def transfer_repository(request: TransferRequest, db: Session = Depends(ge
     db.refresh(job)
 
     transfer_data = {
+        "job_id": job.id,
         "source_storage": request.source_storage,
         "dest_storage": request.dest_storage,
         "status": "pending",

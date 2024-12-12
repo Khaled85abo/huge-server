@@ -6,8 +6,11 @@ from app.logging.logger import logger
 import time
 from app.websocket.connection_manager import manager
 from celery import shared_task
-
-
+from app.database.models.models import Job
+from app.db_setup import get_db
+from sqlalchemy.orm import Session
+from app.db_setup import engine
+from app.database.models.models import JobStatus
 # Why read in chunks?
 # - Windows is not as efficient with large file transfers
 # - Reading in chunks allows us to update the progress bar more frequently
@@ -21,6 +24,7 @@ CHUNK_SIZE = {
 def windows_tar_transfer(transfer_data, server_configs, identity_file):
     """Windows-specific implementation using paramiko"""
     try:
+        update_job_status(transfer_data['job_id'], JobStatus.IN_PROGRESS)
         logger.info(f"Starting windows transfer process with data: {transfer_data}")
         source = transfer_data['source_storage']
         dest = transfer_data['dest_storage']
@@ -129,6 +133,7 @@ def windows_tar_transfer(transfer_data, server_configs, identity_file):
                         # callback(len(data), total_bytes)
                         time.sleep(0.3)
         except Exception as e:
+            update_job_status(transfer_data['job_id'], JobStatus.FAILED)
             logger.error(f"Error transferring zip file: {str(e)}")
             raise
 
@@ -168,23 +173,20 @@ def windows_tar_transfer(transfer_data, server_configs, identity_file):
         dest_ssh.close()
         logger.info("All connections closed")
         
-        return {
-            "status": "completed",
-            "message": "Repository transfer successful",
-            "source": source,
-            "destination": dest
-        }
+        update_job_status(transfer_data['job_id'], JobStatus.COMPLETED)
+ 
         
     except Exception as e:
+        update_job_status(transfer_data['job_id'], JobStatus.FAILED)
         logger.error(f"Windows transfer failed with error: {str(e)}")
-        manager.sync_broadcast_to_user(
-            user_id,
-            {
-                "type": "transfer_progress",
-                "progress": -1,
-                "error": str(e)
-            }
-        )
+        # manager.sync_broadcast_to_user(
+        #     user_id,
+        #     {
+        #         "type": "transfer_progress",
+        #         "progress": -1,
+        #         "error": str(e)
+        #     }
+        # )
         raise Exception(f"Windows transfer failed: {str(e)}")
     
 
@@ -367,3 +369,21 @@ def create_progress_callback(user_id, total_bytes, current_file, start_time, byt
         )
     
     return progress_callback
+
+
+# def update_job_status(job_id: int,  status: str):
+#     with Session(engine) as db:
+#         db.query(Job).filter(Job.id == job_id).update({"status": status})
+#         db.commit()
+        
+def update_job_status(job_id: int, status: str):
+    with Session(engine) as db:
+        job = db.query(Job).filter(Job.id == job_id).first()
+        if job:
+            job.status = status
+            db.commit()
+        else:
+            logger.error(f"Job with id {job_id} not found")
+# async def update_job_status(job_id: int, status: str, db: Session):
+#     db.query(Job).filter(Job.id == job_id).update({"status": status})
+#     db.commit()
