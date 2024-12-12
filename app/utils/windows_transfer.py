@@ -20,8 +20,8 @@ CHUNK_SIZE = {
     'medium': 65536,
     'large': 131072
 }
-@shared_task(name="transfer.windows")
-def windows_tar_transfer(transfer_data, server_configs, identity_file):
+@shared_task(name="transfer.windows", bind=True)
+def windows_tar_transfer(self, transfer_data, server_configs, identity_file):
     """Windows-specific implementation using paramiko"""
     try:
         update_job_status(transfer_data['job_id'], JobStatus.IN_PROGRESS)
@@ -130,10 +130,24 @@ def windows_tar_transfer(transfer_data, server_configs, identity_file):
                         if not data:
                             break
                         dest_fh.write(data)
-                        # callback(len(data), total_bytes)
+                        bytes_transferred += len(data)
+                        
+                        # Report progress to Celery
+                        self.update_state(
+                            state=JobStatus.IN_PROGRESS,
+                            meta={
+                                'current': bytes_transferred,
+                                'total': total_bytes,
+                                'status': 'Transferring',
+                                'percent': int((bytes_transferred / total_bytes) * 100)
+                            }
+                        )
+                        
                         time.sleep(0.3)
         except Exception as e:
+            # TODO: set the task_id to null
             update_job_status(transfer_data['job_id'], JobStatus.FAILED)
+
             logger.error(f"Error transferring zip file: {str(e)}")
             raise
 
@@ -173,10 +187,12 @@ def windows_tar_transfer(transfer_data, server_configs, identity_file):
         dest_ssh.close()
         logger.info("All connections closed")
         
+        # TODO: set the task_id to null
         update_job_status(transfer_data['job_id'], JobStatus.COMPLETED)
  
         
     except Exception as e:
+        # TODO: set the task_id to null
         update_job_status(transfer_data['job_id'], JobStatus.FAILED)
         logger.error(f"Windows transfer failed with error: {str(e)}")
         # manager.sync_broadcast_to_user(

@@ -9,7 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.logging.logger import logger
 from typing import List, Dict
 from app.websocket.connection_manager import manager
-
+from app.utils.job_monitor import monitor_jobs
+import asyncio
 
 # Funktion som körs när vi startar FastAPI -
 # perfekt ställe att skapa en uppkoppling till en databas
@@ -55,7 +56,12 @@ async def user_websocket_endpoint(websocket: WebSocket, user_id: int):
     try:
         await manager.connect_to_user(websocket, user_id)
         while True:
-            data = await websocket.receive_text()
+            # Receive job IDs to monitor
+            data = await websocket.receive_json()
+            if data["type"] == "monitor_jobs":
+                job_ids = data["job_ids"]
+                # Start monitoring these jobs
+                asyncio.create_task(monitor_jobs(user_id, job_ids))
     except WebSocketDisconnect:
         manager.disconnect_from_user(websocket, user_id)
 
