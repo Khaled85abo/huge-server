@@ -1,109 +1,63 @@
 from celery.result import AsyncResult
 from app.websocket.connection_manager import manager
-from app.database.models.models import Job
+from app.database.models.models import Job, JobStatus
 from app.db_setup import Session, engine
 import asyncio
-from app.database.models.models import JobStatus
-import json
 from app.logging.logger import logger
 
-async def monitor_jobs(user_id: int, job_ids: list):
-    """Monitor Celery tasks for the given job IDs and send progress updates via WebSocket"""
-    while True:
-        try:
-            with Session(engine) as db:
-                jobs = db.query(Job).filter(Job.id.in_(job_ids)).all()
-                
-                updates = []
-                active_jobs = False
-                
-                for job in jobs:
-                    if job.task_id:
-                        result = AsyncResult(job.task_id)
-                        
+class JobMonitor:
+    def __init__(self):
+        self._current_job = None
+        self._is_running = False
+
+    async def start_monitoring(self):
+        """Single monitoring loop that tracks the current active job"""
+        self._is_running = True
+        
+        while self._is_running:
+            try:
+                with Session(engine) as db:
+                    # Get the currently processing job
+                    active_job = db.query(Job).filter(Job.status == JobStatus.IN_PROGRESS).first()
+                    
+                    if active_job and active_job.task_id:
+                        result = AsyncResult(active_job.task_id)
                         status = result.status
-                        info = {
-                            "job_id": job.id,
+                        
+                        update = {
+                            "job_id": active_job.id,
                             "status": status,
-                            "task_id": job.task_id,
+                            "task_id": active_job.task_id,
                         }
                         
                         # Add progress info if available
                         if status == JobStatus.IN_PROGRESS and result.info:
-                            info.update(result.info)
+                            # result.info contains the meta data from self.update_state
+                            progress_info = result.info
+                            update.update({
+                                "current": progress_info.get('current', 0),
+                                "total": progress_info.get('total', 0),
+                                "percent": progress_info.get('percent', 0),
+                                "status": progress_info.get('status', JobStatus.IN_PROGRESS)
+                            })
                         
-                        updates.append(info)
+                        # Broadcast to the job's owner
+                        await manager.broadcast_to_user(
+                            active_job.user_id,
+                            {
+                                "type": "job_updates",
+                                "updates": [update]
+                            }
+                        )
                         
-                        # Check if we have any active jobs
-                        if status in [JobStatus.PENDING, JobStatus.IN_PROGRESS]:
-                            active_jobs = True
+            except Exception as e:
+                logger.error(f"Error in job monitor: {str(e)}")
                 
-                # Send updates via WebSocket
-                if updates:
-                    await manager.broadcast_to_user(
-                        user_id,
-                        {
-                            "type": "job_updates",
-                            "updates": updates
-                        }
-                    )
-                
-                # If no active jobs, stop monitoring
-                if not active_jobs:
-                    break
-                
-        except Exception as e:
-            logger.error(f"Error monitoring jobs: {str(e)}")
-            break
-            
-        # Wait before next update
-        await asyncio.sleep(1)
+            await asyncio.sleep(1)
+    
+    def stop_monitoring(self):
+        """Stop the monitoring loop"""
+        self._is_running = False
 
-
-async def monitor_celery_task(user_id: int, task_id: str):
-    """Monitor a single Celery task and broadcast updates"""
-    while True:
-        try:
-            # Get task status from Celery
-            result = AsyncResult(task_id)
-            
-            if result.ready():  # Task is finished
-                if result.successful():
-                    await manager.broadcast_to_user(
-                        user_id,
-                        {
-                            "type": "transfer_progress",
-                            "task_id": task_id,
-                            "status": "completed"
-                        }
-                    )
-                else:
-                    await manager.broadcast_to_user(
-                        user_id,
-                        {
-                            "type": "transfer_progress",
-                            "task_id": task_id,
-                            "status": "failed",
-                            "error": str(result.result)  # Get error message
-                        }
-                    )
-                break
-            
-            elif result.state == 'PROGRESS':
-                # Get progress info that we stored with update_state
-                progress_data = result.info
-                await manager.broadcast_to_user(
-                    user_id,
-                    {
-                        "type": "transfer_progress",
-                        "task_id": task_id,
-                        "status": "in_progress",
-                        **progress_data  # Include all progress data
-                    }
-                )
-            
-        except Exception as e:
-            logger.error(f"Error monitoring task {task_id}: {str(e)}")
-            break
-            
-        await asyncio.sleep(1)  # Wait before next check
+# Create a single instance
+job_monitor = JobMonitor()

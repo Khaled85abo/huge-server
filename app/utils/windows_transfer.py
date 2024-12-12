@@ -138,7 +138,7 @@ def windows_tar_transfer(self, transfer_data, server_configs, identity_file):
                             meta={
                                 'current': bytes_transferred,
                                 'total': total_bytes,
-                                'status': 'Transferring',
+                                'status': JobStatus.IN_PROGRESS,
                                 'percent': int((bytes_transferred / total_bytes) * 100)
                             }
                         )
