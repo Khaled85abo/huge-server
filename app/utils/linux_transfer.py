@@ -3,7 +3,9 @@ import re
 import time
 from fastapi import HTTPException
 from app.logging.logger import logger
+from celery import shared_task
 
+@shared_task(name="transfer.linux")
 async def linux_transfer(transfer_data, server_configs, identity_file):
     """Linux-specific implementation using subprocess"""
     if transfer_data['source_storage'] == "":

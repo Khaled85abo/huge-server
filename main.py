@@ -48,15 +48,6 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(v1_router, prefix="/v1")
 # init_weaviate()
 
-# Workspace WebSocket endpoint (existing)
-@app.websocket("/v1/ws/workspace/{workspace_id}")
-async def workspace_websocket_endpoint(websocket: WebSocket, workspace_id: int):
-    try:
-        await manager.connect_to_workspace(websocket, workspace_id)
-        while True:
-            data = await websocket.receive_text()
-    except WebSocketDisconnect:
-        manager.disconnect_from_workspace(websocket, workspace_id)
 
 # New user notifications WebSocket endpoint
 @app.websocket("/v1/ws/user/{user_id}")

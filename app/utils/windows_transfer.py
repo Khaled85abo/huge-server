@@ -5,20 +5,20 @@ import paramiko
 from app.logging.logger import logger
 import time
 from app.websocket.connection_manager import manager
-
+from celery import shared_task
 
 
 # Why read in chunks?
 # - Windows is not as efficient with large file transfers
 # - Reading in chunks allows us to update the progress bar more frequently
 # - Reading in chunks allows us to handle errors more gracefully
-CHUNK_SIZES = {
+CHUNK_SIZE = {
     'small': 32768,
     'medium': 65536,
     'large': 131072
 }
-
-async def windows_tar_transfer(transfer_data, server_configs, identity_file):
+@shared_task(name="transfer.windows")
+def windows_tar_transfer(transfer_data, server_configs, identity_file):
     """Windows-specific implementation using paramiko"""
     try:
         logger.info(f"Starting windows transfer process with data: {transfer_data}")
@@ -108,13 +108,13 @@ async def windows_tar_transfer(transfer_data, server_configs, identity_file):
         # dest_ssh.exec_command(mkdir_command)
 
         # Create progress callback for single file transfer
-        callback = create_progress_callback(
-            user_id=user_id,
-            total_bytes=total_bytes,
-            current_file=source_archive,
-            start_time=start_time,
-            bytes_transferred=bytes_transferred
-        )
+        # callback = create_progress_callback(
+        #     user_id=user_id,
+        #     total_bytes=total_bytes,
+        #     current_file=source_archive,
+        #     start_time=start_time,
+        #     bytes_transferred=bytes_transferred
+        # )
 
         # Transfer the zip file
         logger.info(f"Transferring zip file to destination")
@@ -122,11 +122,12 @@ async def windows_tar_transfer(transfer_data, server_configs, identity_file):
             with source_sftp.file(source_archive, 'rb') as source_fh:
                 with dest_sftp.file(dest_archive, 'wb') as dest_fh:
                     while True:
-                        data = source_fh.read(CHUNK_SIZES['small'])
+                        data = source_fh.read(CHUNK_SIZE['small'])
                         if not data:
                             break
                         dest_fh.write(data)
-                        callback(len(data), total_bytes)
+                        # callback(len(data), total_bytes)
+                        time.sleep(0.3)
         except Exception as e:
             logger.error(f"Error transferring zip file: {str(e)}")
             raise
@@ -176,7 +177,7 @@ async def windows_tar_transfer(transfer_data, server_configs, identity_file):
         
     except Exception as e:
         logger.error(f"Windows transfer failed with error: {str(e)}")
-        await manager.broadcast_to_user(
+        manager.sync_broadcast_to_user(
             user_id,
             {
                 "type": "transfer_progress",
@@ -287,7 +288,7 @@ async def windows_files_transfer(transfer_data, server_configs, identity_file):
                 with source_sftp.file(source_file, 'rb') as source_fh:
                     with dest_sftp.file(dest_file, 'wb') as dest_fh:
                         while True:
-                            data = source_fh.read(32768)  # Read in 32KB chunks
+                            data = source_fh.read(CHUNK_SIZE['small'])  # Read in 32KB chunks
                             if not data:
                                 break
                             dest_fh.write(data)
@@ -356,7 +357,7 @@ def create_progress_callback(user_id, total_bytes, current_file, start_time, byt
                 {
                     "type": "transfer_progress",
                     "progress": progress,
-                    "current_file": current_file,
+                    "job_id": 2,
                     "bytes_transferred": bytes_transferred,
                     "total_bytes": total_bytes,
                     "estimated_time_remaining": int(estimated_seconds),
