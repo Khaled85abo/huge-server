@@ -40,6 +40,19 @@ class JobMonitor:
                                 "percent": progress_info.get('percent', 0),
                                 "status": progress_info.get('status', JobStatus.IN_PROGRESS)
                             })
+                            
+                        # Check if job is complete (SUCCESS or FAILURE)
+                        # elif status in ['SUCCESS', JobStatus.COMPLETED]:
+                        #     logger.info(f"Job {active_job.id} completed with status: {status}")
+                        #     # Send a job completion notification
+                        #     await manager.broadcast_to_user(
+                        #         active_job.user_id,
+                        #         {
+                        #             "type": "job_completion",
+                        #             "job_id": active_job.id,
+                        #             "status": JobStatus.COMPLETED
+                        #         }
+                        #     )
                         
                         # Broadcast to the job's owner
                         await manager.broadcast_to_user(

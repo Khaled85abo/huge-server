@@ -136,6 +136,9 @@ def windows_tar_transfer(self, transfer_data, server_configs, identity_file):
                         self.update_state(
                             state=JobStatus.IN_PROGRESS,
                             meta={
+                                'job_id': transfer_data['job_id'],
+                                'task_id': self.request.id,
+                                'user_id': user_id,
                                 'current': bytes_transferred,
                                 'total': total_bytes,
                                 'status': JobStatus.IN_PROGRESS,
@@ -144,6 +147,15 @@ def windows_tar_transfer(self, transfer_data, server_configs, identity_file):
                         )
                         
                         time.sleep(0.3)
+
+            self.update_state(
+                state=JobStatus.COMPLETED,
+                meta={
+                    'job_id': transfer_data['job_id'],
+                    'task_id': self.request.id,
+                    'user_id': user_id,
+                }
+            )
         except Exception as e:
             # TODO: set the task_id to null
             update_job_status(transfer_data['job_id'], JobStatus.FAILED)

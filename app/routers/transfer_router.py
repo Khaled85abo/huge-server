@@ -30,6 +30,12 @@ SERVER_CONFIGS = {
 
 IDENTITY_FILE = Path(__file__).parent.parent / 'identityFile' / 'id_rsa'
 
+
+@router.get("")
+async def get_jobs(db: Session = Depends(get_db)):
+    jobs = db.query(Job).filter(Job.user_id == 1).order_by(Job.created_date.desc()).all()
+    return jobs
+
 @router.post("")
 # async def transfer_resources(request: TransferRequest, current_user_id: int):
 async def transfer_repository(request: TransferRequest, db: Session = Depends(get_db)):
@@ -84,6 +90,7 @@ async def transfer_repository(request: TransferRequest, db: Session = Depends(ge
         error_msg = f"Transfer failed: {str(e)}"
         logger.error(error_msg)
         raise HTTPException(status_code=500, detail=error_msg)
+
 
 
 
