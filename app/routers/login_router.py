@@ -63,6 +63,22 @@ saml_settings = {
         # You can use the metadata URL
         # "metadata": IDENTITY_PROVIDER_METADATA_URL
         # "metadata": idp_data["idp"]
+    },
+        # Add security settings to request a session index
+    "security": {
+        "nameIdEncrypted": False,
+        "authnRequestsSigned": False,
+        "logoutRequestSigned": False,
+        "logoutResponseSigned": False,
+        "signMetadata": False,
+        "wantMessagesSigned": False,
+        "wantAssertionsSigned": False,
+        "wantNameId": True,  # Make sure this is True
+        "wantNameIdEncrypted": False,
+        "wantAssertionsEncrypted": False,
+        "signatureAlgorithm": "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
+        "digestAlgorithm": "http://www.w3.org/2001/04/xmlenc#sha256",
+        "createSession": True  # Enable session creation
     }
 }
 
@@ -106,9 +122,14 @@ async def login_callback(request: Request, response: Response, db: Session = Dep
     
     req = await prepare_fastapi_request(request)
     auth = init_saml_auth(req)
+
     
     try:
         auth.process_response()
+        name_id = auth.get_nameid()
+        session_index = auth.get_session_index()
+        print(f"NameID: {name_id}")
+        print(f"Session Index: {session_index}")
         print("Response processed successfully")
     except Exception as e:
         print(f"Error processing response: {str(e)}")
@@ -179,19 +200,21 @@ async def login_callback(request: Request, response: Response, db: Session = Dep
             print("11. Found existing user")
 
         # Create session with all required fields
-        session_token = str(uuid4())
+        session_id = str(uuid4())
         new_session = Session(
-            session_token=session_token,
+            session_id=session_id,
             user_id=user.id,
             last_accessed_at=datetime.now(),
             expires_at=datetime.now() + timedelta(days=1),  # Set expiration to 24 hours
             ip_address=request.client.host,
             is_active=True,
-            user_agent=request.headers.get("user-agent", "Unknown")
+            user_agent=request.headers.get("user-agent", "Unknown"),
+            saml_name_id=name_id,  # Add these new fields
+            saml_session_index=session_index  # Add these new fields
         )
         db.add(new_session)
         db.commit()
-        print("12. Session created:", session_token)
+        print("12. Session created:", session_id)
 
         # Modify the end of the function to redirect instead of returning JSON
         response = RedirectResponse(
@@ -202,7 +225,7 @@ async def login_callback(request: Request, response: Response, db: Session = Dep
         # Modified cookie settings for better compatibility
         response.set_cookie(
             key="session_id",
-            value=session_token,
+            value=session_id,
             httponly=True,
             secure=False,  # Set to True if using HTTPS
             samesite="lax",  # Changed from "none" to "lax" for better compatibility
@@ -244,31 +267,6 @@ async def metadata():
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
-
-@router.post("/logout")
-async def logout(
-    request: Request,
-    db: Session = Depends(get_db),
-    session_id: str = Cookie(None)
-):
-    # Clear local session
-    if session_id:
-        session_record = db.query(Session).filter_by(session_id=session_id).first()
-        if session_record:
-            db.delete(session_record)
-            db.commit()
-
-    # Initiate SAML logout
-    req = await prepare_fastapi_request(request)
-    auth = init_saml_auth(req)
-    name_id = None
-    session_index = None
-    slo_url = auth.logout(name_id=name_id, session_index=session_index)
-
-    response = RedirectResponse(url=slo_url)
-    # response = JSONResponse({"status": "logged_out"})
-    response.delete_cookie(key="session_id")
-    return response
 
 
 @router.get("/me")

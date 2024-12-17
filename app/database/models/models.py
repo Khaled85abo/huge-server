@@ -27,7 +27,9 @@ class User(Base):
 class Session(Base):
     __tablename__ = "sessions"
 
-    session_token: Mapped[str] = mapped_column(String(255), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    saml_name_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    saml_session_index: Mapped[str] = mapped_column(String(255), nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("user.id"), nullable=False)
     last_accessed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

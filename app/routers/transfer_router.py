@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from app.database.schemas.schemas import TransferRequest
 # from app.tasks.transfer import transfer
-from app.database.models.models import Job
+from app.database.models.models import Job, User
 import subprocess
 from pathlib import Path
 import time
@@ -13,6 +13,7 @@ from app.utils.linux_transfer import linux_transfer
 from app.db_setup import get_db
 from sqlalchemy.orm import Session
 from app.celery_app import celery_app
+from app.auth import get_current_user
 router = APIRouter()
 
 
@@ -32,13 +33,13 @@ IDENTITY_FILE = Path(__file__).parent.parent / 'identityFile' / 'id_rsa'
 
 
 @router.get("")
-async def get_jobs(db: Session = Depends(get_db)):
-    jobs = db.query(Job).filter(Job.user_id == 1).order_by(Job.created_date.desc()).all()
+async def get_jobs(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    jobs = db.query(Job).filter(Job.user_id == current_user.id).order_by(Job.created_date.desc()).all()
     return jobs
 
 @router.post("")
 # async def transfer_resources(request: TransferRequest, current_user_id: int):
-async def transfer_repository(request: TransferRequest, db: Session = Depends(get_db)):
+async def transfer_repository(request: TransferRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     # Create transfer data dictionary with required information
     if request.source_storage == "":
         raise HTTPException(status_code=400, detail="Source storage is required")
@@ -50,7 +51,7 @@ async def transfer_repository(request: TransferRequest, db: Session = Depends(ge
         source_storage=request.source_storage,
         dest_storage=request.dest_storage,
         status="pending",
-        user_id=1
+        user_id=current_user.id
     )
     db.add(job)
     db.commit()
@@ -61,7 +62,7 @@ async def transfer_repository(request: TransferRequest, db: Session = Depends(ge
         "source_storage": request.source_storage,
         "dest_storage": request.dest_storage,
         "status": "pending",
-        "user_id": 1
+        "user_id": current_user.id
     }
 
     try:
@@ -98,7 +99,7 @@ async def transfer_repository(request: TransferRequest, db: Session = Depends(ge
 
 
 @router.post("/test")
-async def test_transfer_direct(request: TransferRequest):
+async def test_transfer_direct(request: TransferRequest, current_user: User = Depends(get_current_user)):
     """Test endpoint that performs transfer directly without Celery"""
     if request.source_storage == "":
         raise HTTPException(status_code=400, detail="Source storage is required")
@@ -108,7 +109,7 @@ async def test_transfer_direct(request: TransferRequest):
     transfer_data = {
         "source_storage": request.source_storage,
         "dest_storage": request.dest_storage,
-        "user_id": 1  # Hardcoded for testing
+        "user_id": current_user.id  # Hardcoded for testing
     }
 
     try:
