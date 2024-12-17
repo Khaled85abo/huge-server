@@ -19,6 +19,8 @@ idp_data = OneLogin_Saml2_IdPMetadataParser.parse_remote(IDENTITY_PROVIDER_METAD
 
 router = APIRouter()
 
+# Add this new environment variable at the top with other env vars
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173/dashboard')  # Default to localhost for development
 
 # Read the certificate file
 with open('cert/saml.pem', 'r') as cert_file:
@@ -191,17 +193,24 @@ async def login_callback(request: Request, response: Response, db: Session = Dep
         db.commit()
         print("12. Session created:", session_token)
 
-        # Set cookie
+        # Modify the end of the function to redirect instead of returning JSON
+        response = RedirectResponse(
+            url=FRONTEND_URL,
+            status_code=status.HTTP_303_SEE_OTHER
+        )
+        
+        # Modified cookie settings for better compatibility
         response.set_cookie(
             key="session_id",
             value=session_token,
             httponly=True,
-            secure=False,
-            samesite="none"
+            secure=False,  # Set to True if using HTTPS
+            samesite="lax",  # Changed from "none" to "lax" for better compatibility
+            path="/",  # Added to ensure cookie is available across all paths
+            max_age=86400  # Added 24-hour expiration (in seconds)
         )
-        print("13. Cookie set")
-
-        return {"status": "ok"}
+        
+        return response
 
     except Exception as e:
         print("Error in database operations:", str(e))
@@ -262,7 +271,7 @@ async def logout(
     return response
 
 
-@router.get("/whoami")
+@router.get("/me")
 async def whoami(
     request: Request,
     db: Session = Depends(get_db),
