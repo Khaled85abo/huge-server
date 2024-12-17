@@ -67,14 +67,14 @@ saml_settings = {
         # Add security settings to request a session index
     "security": {
         "nameIdEncrypted": False,
-        "authnRequestsSigned": False,
+        "authnRequestsSigned": True,
         "logoutRequestSigned": False,
         "logoutResponseSigned": False,
         "signMetadata": False,
-        "wantMessagesSigned": False,
+        "wantMessagesSigned": True,
         "wantAssertionsSigned": False,
         "wantNameId": True,  # Make sure this is True
-        "wantNameIdEncrypted": False,
+        "wantNameIdEncrypted": True,
         "wantAssertionsEncrypted": False,
         "signatureAlgorithm": "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
         "digestAlgorithm": "http://www.w3.org/2001/04/xmlenc#sha256",
