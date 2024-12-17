@@ -9,6 +9,8 @@ from app.auth import authenticate_user, create_access_token, ACCESS_TOKEN_EXPIRE
 from uuid import uuid4
 from app.auth import get_current_user
 from app.routers.login_router import prepare_fastapi_request, init_saml_auth, SERVICE_PROVIDER_ENTITY_ID
+from app.logging.logger import logger
+
 router = APIRouter()
 
 
@@ -111,30 +113,39 @@ async def whoami(
 @router.get("/slo")
 @router.post("/slo")
 async def slo(request: Request, db: Session = Depends(get_db)):
+    logger.info("SLO endpoint called with method: %s", request.method)
     req = await prepare_fastapi_request(request)
     auth = init_saml_auth(req)
     
     # Process the logout response
+    logger.debug("Processing SLO with auth object")
     url = auth.process_slo(delete_session_cb=lambda: None)
     
     errors = auth.get_errors()
+    logger.info("SLO process completed. Errors: %s, Redirect URL: %s", errors, url)
+    
     if len(errors) == 0:
         if url is not None:
+            logger.info("Redirecting to IdP URL: %s", url)
             return RedirectResponse(url=url)
         else:
-            return RedirectResponse(url="/")  # Redirect to home page after successful logout
+            logger.info("No redirect URL provided, returning to home page")
+            return RedirectResponse(url="/")
     else:
+        error_reason = auth.get_last_error_reason()
+        logger.error("SLO failed with error: %s", error_reason)
         return HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=auth.get_last_error_reason()
+            detail=error_reason
         )
     
-@router.post("/logout")
+@router.get("/logout")
 async def logout(
     request: Request,
     db: Session = Depends(get_db),
     session_id: str = Cookie(None)
 ):
+    logger.info("Logout initiated for session_id: %s", session_id)
     name_id = None
     session_index = None
     
@@ -143,28 +154,39 @@ async def logout(
         if session_record:
             name_id = session_record.saml_name_id
             session_index = session_record.saml_session_index
+            logger.debug("Found SAML session info - name_id: %s, session_index: %s", 
+                        name_id, session_index)
             # Delete the session from database
             db.delete(session_record)
             db.commit()
+            logger.info("Deleted session from database")
+        else:
+            logger.warning("No session record found for session_id: %s", session_id)
 
     # Initiate SAML logout
     req = await prepare_fastapi_request(request)
     auth = init_saml_auth(req)
     
+    return_to_url = f"{SERVICE_PROVIDER_ENTITY_ID}/v1/users/slo"
+    logger.debug("Initiating SAML logout with return URL: %s", return_to_url)
+    
     # Get the SAML logout URL
     slo_url = auth.logout(
         name_id=name_id,
         session_index=session_index,
-        return_to=f"{SERVICE_PROVIDER_ENTITY_ID}/v1/users/slo"  # Specify return URL
+        return_to=return_to_url
     )
+    
+    logger.info("Generated SLO URL: %s", slo_url)
 
     if slo_url is None:
-        # If no URL is returned, just do local logout
+        logger.info("No SLO URL returned, performing local logout only")
         response = RedirectResponse(url="/")
         response.delete_cookie(key="session_id")
         return response
 
     # Redirect to IdP logout URL
-    response = RedirectResponse(url=slo_url)
+    logger.info("Redirecting to IdP logout URL: %s", slo_url)
+    # response = RedirectResponse(url=slo_url)
     response.delete_cookie(key="session_id")
     return response
