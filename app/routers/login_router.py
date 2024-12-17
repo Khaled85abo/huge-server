@@ -8,6 +8,7 @@ import os
 from app.db_setup import get_db
 from app.database.models import User, Session
 from uuid import uuid4
+from datetime import datetime, timedelta
 
 IDENTITY_PROVIDER_SINGLE_SIGN_ON_URL = os.getenv('IDENTITY_PROVIDER_SINGLE_SIGN_ON_URL')
 IDENTITY_PROVIDER_ISSUER = os.getenv('IDENTITY_PROVIDER_ISSUER')
@@ -32,7 +33,7 @@ saml_settings = {
     "strict": True,
     "debug": True,
     "sp": {
-        "entityId": f"{SERVICE_PROVIDER_ENTITY_ID}/v1/metadata/",
+        "entityId": f"{SERVICE_PROVIDER_ENTITY_ID}",
         "assertionConsumerService": {
             "url": f"{SERVICE_PROVIDER_ENTITY_ID}/v1/login/callback",
             "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
@@ -97,68 +98,142 @@ async def login(request: Request):
 
 @router.post("/callback")
 async def login_callback(request: Request, response: Response, db: Session = Depends(get_db)):
-    req = await prepare_fastapi_request(request)  # Make this async
+    print("\n=== SAML Debug ===")
+    print(f"SP Entity ID: {saml_settings['sp']['entityId']}")
+    print(f"ACS URL: {saml_settings['sp']['assertionConsumerService']['url']}")
+    
+    req = await prepare_fastapi_request(request)
     auth = init_saml_auth(req)
-    auth.process_response()
+    
+    try:
+        auth.process_response()
+        print("Response processed successfully")
+    except Exception as e:
+        print(f"Error processing response: {str(e)}")
+        # Get more details about the error
+        print("Errors:", auth.get_errors())
+        print("Last Error Reason:", auth.get_last_error_reason())
+        raise HTTPException(status_code=401, detail=str(e))
+    
+    # Check for errors
     errors = auth.get_errors()
-
     if len(errors) != 0:
+        print("5. SAML Errors:", errors)
+        print("6. Last Error Reason:", auth.get_last_error_reason())
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=', '.join(errors)
+            detail=f"SAML Errors: {', '.join(errors)}. Reason: {auth.get_last_error_reason()}"
         )
 
-    if not auth.is_authenticated():
+    # Check authentication
+    is_authenticated = auth.is_authenticated()
+    print("7. Is Authenticated:", is_authenticated)
+    
+    if not is_authenticated:
+        print("8. Authentication failed")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated"
         )
 
-    # Get the user data from SAML assertion
-    saml_attributes = auth.get_attributes()
-    email = saml_attributes.get('email')[0]  # Adjust based on your Okta attribute mapping
+    # Get user attributes
+    try:
+        saml_attributes = auth.get_attributes()
+        print("9. SAML Attributes:", saml_attributes)
+        email = saml_attributes.get('email', [None])[0]
+        print("10. Extracted Email:", email)
+    except Exception as e:
+        print("Error getting attributes:", str(e))
+        raise HTTPException(status_code=500, detail="Error extracting user data")
 
-    # Find or create user
-    user = db.query(User).filter(User.email == email).first()
-    if not user:
-        # Create new user if doesn't exist
-        user = User(email=email)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+    # Debug settings
+    print("\n=== SAML Settings ===")
+    print("SP Entity ID:", saml_settings['sp']['entityId'])
+    print("ACS URL:", saml_settings['sp']['assertionConsumerService']['url'])
+    print("IDP Entity ID:", saml_settings['idp'].get('entityId'))
+    print("========================\n")
 
-    # Create session
-    session_id = str(uuid4())
-    new_session = Session(session_id=session_id, user_id=user.id)
-    db.add(new_session)
-    db.commit()
+    # Rest of your code...
+    try:
+        # Get user attributes from SAML response
+        saml_attributes = auth.get_attributes()
+        email = saml_attributes.get('email', [None])[0]
+        firstname = saml_attributes.get('firstname', [None])[0]
+        lastname = saml_attributes.get('lastname', [None])[0]
+        
+        # Find or create user
+        user = db.query(User).filter(User.email == email).first()
+        if not user:
+            print("11. Creating new user")
+            user = User(
+                email=email,
+                name=f"{firstname} {lastname}",
+                org="MAX VI"
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        else:
+            print("11. Found existing user")
 
-    # Set session cookie
-    response.set_cookie(
-        key="session_id",
-        value=session_id,
-        httponly=True,
-        secure=False,  # Set to True in production
-        samesite="none"
-    )
-
-    return {"status": "ok"}
-
-@router.get("/metadata/")
-async def metadata():
-    auth = OneLogin_Saml2_Auth({}, saml_settings)
-    metadata = auth.get_settings().get_sp_metadata()
-    errors = auth.get_settings().validate_metadata(metadata)
-
-    if len(errors) == 0:
-        return Response(
-            content=metadata,
-            media_type='text/xml'
+        # Create session with all required fields
+        session_token = str(uuid4())
+        new_session = Session(
+            session_token=session_token,
+            user_id=user.id,
+            last_accessed_at=datetime.now(),
+            expires_at=datetime.now() + timedelta(days=1),  # Set expiration to 24 hours
+            ip_address=request.client.host,
+            is_active=True,
+            user_agent=request.headers.get("user-agent", "Unknown")
         )
-    else:
+        db.add(new_session)
+        db.commit()
+        print("12. Session created:", session_token)
+
+        # Set cookie
+        response.set_cookie(
+            key="session_id",
+            value=session_token,
+            httponly=True,
+            secure=False,
+            samesite="none"
+        )
+        print("13. Cookie set")
+
+        return {"status": "ok"}
+
+    except Exception as e:
+        print("Error in database operations:", str(e))
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/metadata")
+async def metadata():
+    print("\n=== Metadata Debug ===")
+    try:
+        auth = OneLogin_Saml2_Auth({}, saml_settings)
+        metadata = auth.get_settings().get_sp_metadata()
+        print("Generated Metadata:", metadata)
+        
+        errors = auth.get_settings().validate_metadata(metadata)
+        if len(errors) == 0:
+            print("Metadata validation successful")
+            return Response(
+                content=metadata,
+                media_type='text/xml'
+            )
+        else:
+            print("Metadata validation errors:", errors)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=', '.join(errors)
+            )
+    except Exception as e:
+        print("Error generating metadata:", str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=', '.join(errors)
+            detail=str(e)
         )
 
 @router.post("/logout")
