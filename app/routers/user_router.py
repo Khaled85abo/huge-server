@@ -50,7 +50,7 @@ async def whoami(
         )
 
     # Get session from database
-    session = db.query(Session).filter_by(session_id=session_id).first()
+    session = db.query(Session).filter_by(session_token=session_id).first()
     if not session:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
