@@ -8,7 +8,7 @@ from app.database.models import User, Session
 from app.auth import authenticate_user, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
 from uuid import uuid4
 from app.auth import get_current_user
-from app.routers.login_router import prepare_fastapi_request, init_saml_auth, SERVICE_PROVIDER_ENTITY_ID
+from app.routers.login_router import prepare_fastapi_request, init_saml_auth, SERVICE_PROVIDER_ENTITY_ID, FRONTEND_URL
 from app.logging.logger import logger
 
 router = APIRouter()
@@ -114,31 +114,50 @@ async def whoami(
 @router.post("/slo")
 async def slo(request: Request, db: Session = Depends(get_db)):
     logger.info("SLO endpoint called with method: %s", request.method)
+    logger.debug("GET params: %s", request.query_params)
+    if request.method == "POST":
+        form_data = await request.form()
+        logger.debug("POST data: %s", form_data)
     req = await prepare_fastapi_request(request)
     auth = init_saml_auth(req)
     
-    # Process the logout response
-    logger.debug("Processing SLO with auth object")
-    url = auth.process_slo(delete_session_cb=lambda: None)
-    
-    errors = auth.get_errors()
-    logger.info("SLO process completed. Errors: %s, Redirect URL: %s", errors, url)
-    
-    if len(errors) == 0:
-        if url is not None:
-            logger.info("Redirecting to IdP URL: %s", url)
-            return RedirectResponse(url=url)
-        else:
-            logger.info("No redirect URL provided, returning to home page")
-            return RedirectResponse(url="/")
-    else:
-        error_reason = auth.get_last_error_reason()
-        logger.error("SLO failed with error: %s", error_reason)
-        return HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=error_reason
-        )
-    
+    try:
+        # For GET requests, the SAML response will be in query parameters
+        if request.method == "GET":
+            saml_response = request.query_params.get('SAMLResponse')
+            if not saml_response:
+                logger.error("No SAMLResponse found in GET parameters")
+                return RedirectResponse(url=FRONTEND_URL)
+        
+        # For POST requests, the SAML response will be in form data
+        elif request.method == "POST":
+            form_data = await request.form()
+            saml_response = form_data.get('SAMLResponse')
+            if not saml_response:
+                logger.error("No SAMLResponse found in POST data")
+                return RedirectResponse(url=FRONTEND_URL)
+        
+        # Process the logout response
+        logger.debug("Processing SLO with SAMLResponse present")
+        url = auth.process_slo(delete_session_cb=lambda: None)
+        
+        errors = auth.get_errors()
+        logger.info("SLO process completed. Errors: %s, Redirect URL: %s", errors, url)
+        
+        if len(errors) == 0:
+            if url is not None:
+                logger.info("Redirecting to IdP URL: %s", url)
+                return RedirectResponse(url=url)
+            else:
+                logger.info("No redirect URL provided, returning to frontend")
+                return RedirectResponse(url=FRONTEND_URL)
+                
+    except Exception as e:
+        logger.error(f"Error processing SLO: {str(e)}")
+        return RedirectResponse(url=FRONTEND_URL)
+
+    return RedirectResponse(url=FRONTEND_URL)
+
 @router.get("/logout")
 async def logout(
     request: Request,
@@ -187,6 +206,6 @@ async def logout(
 
     # Redirect to IdP logout URL
     logger.info("Redirecting to IdP logout URL: %s", slo_url)
-    # response = RedirectResponse(url=slo_url)
+    response = RedirectResponse(url=slo_url)
     response.delete_cookie(key="session_id")
     return response

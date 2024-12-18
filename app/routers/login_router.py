@@ -20,15 +20,25 @@ idp_data = OneLogin_Saml2_IdPMetadataParser.parse_remote(IDENTITY_PROVIDER_METAD
 router = APIRouter()
 
 # Add this new environment variable at the top with other env vars
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173/dashboard')  # Default to localhost for development
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')  # Default to localhost for development
 
-# Read the certificate file
-with open('cert/saml.pem', 'r') as cert_file:
-    cert_content = cert_file.read()
-    # Remove header, footer and newlines
+def serialize_cert(cert_content):
     cert_content = cert_content.replace('-----BEGIN CERTIFICATE-----\n', '')
     cert_content = cert_content.replace('-----END CERTIFICATE-----', '')
     cert_content = cert_content.replace('\n', '')
+    return cert_content
+
+def get_cert_content(path:str):
+    with open(path, 'r')as cert_file:
+        cert_content = cert_file.read()
+    return serialize_cert(cert_content)
+
+
+# Read the certificate file
+# with open('cert/saml.pem', 'r') as cert_file:
+#     cert_content = cert_file.read()
+#     # Remove header, footer and newlines
+#     cert_content = serialize_cert(cert_content)
 
 # SAML settings - store this in a separate config file
 saml_settings = {
@@ -45,8 +55,8 @@ saml_settings = {
             "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
         },
         "NameIDFormat": "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified",
-        "x509cert": "",
-        "privateKey": ""
+        "x509cert": get_cert_content('cert/sp.crt'),
+        "privateKey": get_cert_content('cert/sp.key')
     },
     "idp": {
         # Instead of manually configuring these values
@@ -59,16 +69,16 @@ saml_settings = {
             "url": IDENTITY_PROVIDER_SIGNOUT,
             "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
         },
-        "x509cert": cert_content  # Certificate from Okta
+        "x509cert": get_cert_content('cert/saml.pem'),  # Certificate from Okta
         # You can use the metadata URL
         # "metadata": IDENTITY_PROVIDER_METADATA_URL
         # "metadata": idp_data["idp"]
     },
         # Add security settings to request a session index
     "security": {
-        "logoutRequestSigned": False,
-        "wantMessagesSigned": False,
-        "nameIdEncrypted": False,
+        "logoutRequestSigned": True,
+        "wantMessagesSigned": True,
+        "nameIdEncrypted": True,
         "wantNameIdEncrypted": False,
         "authnRequestsSigned": False,
         "logoutResponseSigned": False,
