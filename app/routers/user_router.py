@@ -114,49 +114,40 @@ async def whoami(
 @router.post("/slo")
 async def slo(request: Request, db: Session = Depends(get_db)):
     logger.info("SLO endpoint called with method: %s", request.method)
-    logger.debug("GET params: %s", request.query_params)
-    if request.method == "POST":
-        form_data = await request.form()
-        logger.debug("POST data: %s", form_data)
     req = await prepare_fastapi_request(request)
     auth = init_saml_auth(req)
     
     try:
-        # For GET requests, the SAML response will be in query parameters
-        if request.method == "GET":
-            saml_response = request.query_params.get('SAMLResponse')
-            if not saml_response:
-                logger.error("No SAMLResponse found in GET parameters")
-                return RedirectResponse(url=FRONTEND_URL)
-        
-        # For POST requests, the SAML response will be in form data
-        elif request.method == "POST":
-            form_data = await request.form()
-            saml_response = form_data.get('SAMLResponse')
-            if not saml_response:
-                logger.error("No SAMLResponse found in POST data")
-                return RedirectResponse(url=FRONTEND_URL)
-        
-        # Process the logout response
-        logger.debug("Processing SLO with SAMLResponse present")
         url = auth.process_slo(delete_session_cb=lambda: None)
-        
         errors = auth.get_errors()
-        logger.info("SLO process completed. Errors: %s, Redirect URL: %s", errors, url)
         
-        if len(errors) == 0:
-            if url is not None:
-                logger.info("Redirecting to IdP URL: %s", url)
-                return RedirectResponse(url=url)
-            else:
-                logger.info("No redirect URL provided, returning to frontend")
-                return RedirectResponse(url=FRONTEND_URL)
-                
+        response = RedirectResponse(
+            url=FRONTEND_URL,
+            status_code=status.HTTP_303_SEE_OTHER  # Match login flow status code
+        )
+        response.delete_cookie(
+            key="session_id",
+            path="/",
+            secure=False,  # Set to True if using HTTPS
+            httponly=True,
+            samesite="lax"
+        )
+        return response
+        
     except Exception as e:
         logger.error(f"Error processing SLO: {str(e)}")
-        return RedirectResponse(url=FRONTEND_URL)
-
-    return RedirectResponse(url=FRONTEND_URL)
+        response = RedirectResponse(
+            url=FRONTEND_URL,
+            status_code=status.HTTP_303_SEE_OTHER
+        )
+        response.delete_cookie(
+            key="session_id",
+            path="/",
+            secure=False,  # Set to True if using HTTPS
+            httponly=True,
+            samesite="lax"
+        )
+        return response
 
 @router.get("/logout")
 async def logout(
@@ -173,39 +164,39 @@ async def logout(
         if session_record:
             name_id = session_record.saml_name_id
             session_index = session_record.saml_session_index
-            logger.debug("Found SAML session info - name_id: %s, session_index: %s", 
-                        name_id, session_index)
-            # Delete the session from database
             db.delete(session_record)
             db.commit()
-            logger.info("Deleted session from database")
-        else:
-            logger.warning("No session record found for session_id: %s", session_id)
 
-    # Initiate SAML logout
     req = await prepare_fastapi_request(request)
     auth = init_saml_auth(req)
     
-    return_to_url = f"{SERVICE_PROVIDER_ENTITY_ID}/v1/users/slo"
-    logger.debug("Initiating SAML logout with return URL: %s", return_to_url)
+    slo_url = f"{SERVICE_PROVIDER_ENTITY_ID}/v1/users/slo"
     
-    # Get the SAML logout URL
-    slo_url = auth.logout(
-        name_id=name_id,
-        session_index=session_index,
-        return_to=return_to_url
-    )
-    
-    logger.info("Generated SLO URL: %s", slo_url)
-
     if slo_url is None:
         logger.info("No SLO URL returned, performing local logout only")
-        response = RedirectResponse(url="/")
-        response.delete_cookie(key="session_id")
+        response = RedirectResponse(
+            url=FRONTEND_URL,
+            status_code=status.HTTP_303_SEE_OTHER  # Match login flow status code
+        )
+        response.delete_cookie(
+            key="session_id",
+            path="/",
+            secure=False,  # Set to True if using HTTPS
+            httponly=True,
+            samesite="lax"
+        )
         return response
 
-    # Redirect to IdP logout URL
     logger.info("Redirecting to IdP logout URL: %s", slo_url)
-    response = RedirectResponse(url=slo_url)
-    response.delete_cookie(key="session_id")
+    response = RedirectResponse(
+        url=slo_url,
+        status_code=status.HTTP_303_SEE_OTHER  # Match login flow status code
+    )
+    response.delete_cookie(
+        key="session_id",
+        path="/",
+        secure=False,  # Set to True if using HTTPS
+        httponly=True,
+        samesite="lax"
+    )
     return response
