@@ -1,9 +1,10 @@
 from celery import Celery
 from kombu.utils.url import maybe_sanitize_url
+import os
 
 # Use separate Redis databases for broker and backend
-redis_broker_url = 'redis://localhost:6379/2'
-redis_backend_url = 'redis://localhost:6379/3'
+redis_broker_url = os.getenv('REDIS_BROKER_URL')
+redis_backend_url = os.getenv('REDIS_BACKEND_URL')
 
 celery_app = Celery(
     'jobs',

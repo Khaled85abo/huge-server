@@ -110,45 +110,6 @@ async def whoami(
 #     response.delete_cookie(key="session_id")
 #     return response
 
-@router.get("/slo")
-@router.post("/slo")
-async def slo(request: Request, db: Session = Depends(get_db)):
-    logger.info("SLO endpoint called with method: %s", request.method)
-    req = await prepare_fastapi_request(request)
-    auth = init_saml_auth(req)
-    
-    try:
-        url = auth.process_slo(delete_session_cb=lambda: None)
-        errors = auth.get_errors()
-        
-        response = RedirectResponse(
-            url=FRONTEND_URL,
-            status_code=status.HTTP_303_SEE_OTHER  # Match login flow status code
-        )
-        response.delete_cookie(
-            key="session_id",
-            path="/",
-            secure=False,  # Set to True if using HTTPS
-            httponly=True,
-            samesite="lax"
-        )
-        return response
-        
-    except Exception as e:
-        logger.error(f"Error processing SLO: {str(e)}")
-        response = RedirectResponse(
-            url=FRONTEND_URL,
-            status_code=status.HTTP_303_SEE_OTHER
-        )
-        response.delete_cookie(
-            key="session_id",
-            path="/",
-            secure=False,  # Set to True if using HTTPS
-            httponly=True,
-            samesite="lax"
-        )
-        return response
-
 @router.get("/logout")
 async def logout(
     request: Request,
@@ -159,44 +120,93 @@ async def logout(
     name_id = None
     session_index = None
     
+    # Get SAML session info before deleting
     if session_id:
         session_record = db.query(Session).filter_by(session_id=session_id).first()
         if session_record:
             name_id = session_record.saml_name_id
             session_index = session_record.saml_session_index
+            logger.info("Found SAML session info - name_id: %s, session_index: %s", 
+                       name_id, session_index)
+            # Delete session after getting SAML info
             db.delete(session_record)
             db.commit()
 
     req = await prepare_fastapi_request(request)
     auth = init_saml_auth(req)
+
+    print("name_id ",name_id)
+    print("session_index ",session_index)
     
-    slo_url = f"{SERVICE_PROVIDER_ENTITY_ID}/v1/users/slo"
-    
-    if slo_url is None:
-        logger.info("No SLO URL returned, performing local logout only")
+    try:
+        # Initiate SAML logout with explicit return URL to SLO endpoint
+        slo_url = auth.logout(
+            name_id=name_id,
+            session_index=session_index,
+            return_to=f"{SERVICE_PROVIDER_ENTITY_ID}/v1/users/slo"  # Explicit SLO endpoint
+        )
+        
+        if not slo_url:
+            logger.warning("No SLO URL returned from Okta, falling back to local logout")
+            return RedirectResponse(
+                url=FRONTEND_URL,
+                status_code=status.HTTP_303_SEE_OTHER
+            )
+        
+        logger.info("Redirecting to Okta SLO URL: %s", slo_url)
         response = RedirectResponse(
-            url=FRONTEND_URL,
-            status_code=status.HTTP_303_SEE_OTHER  # Match login flow status code
+            url=slo_url,
+            status_code=status.HTTP_303_SEE_OTHER
         )
         response.delete_cookie(
             key="session_id",
             path="/",
-            secure=False,  # Set to True if using HTTPS
+            secure=False,
             httponly=True,
             samesite="lax"
         )
         return response
+        
+    except Exception as e:
+        logger.error(f"Error initiating SAML logout: {str(e)}")
+        return RedirectResponse(
+            url=FRONTEND_URL,
+            status_code=status.HTTP_303_SEE_OTHER
+        )
 
-    logger.info("Redirecting to IdP logout URL: %s", slo_url)
-    response = RedirectResponse(
-        url=slo_url,
-        status_code=status.HTTP_303_SEE_OTHER  # Match login flow status code
-    )
-    response.delete_cookie(
-        key="session_id",
-        path="/",
-        secure=False,  # Set to True if using HTTPS
-        httponly=True,
-        samesite="lax"
-    )
-    return response
+@router.get("/slo")
+@router.post("/slo")
+async def slo(request: Request, db: Session = Depends(get_db)):
+    logger.info("SLO endpoint called with method: %s", request.method)
+    req = await prepare_fastapi_request(request)
+    auth = init_saml_auth(req)
+    
+    try:
+        # Process the SAML logout response
+        url = auth.process_slo(delete_session_cb=lambda: None)
+        errors = auth.get_errors()
+        
+        if errors:
+            logger.error("Errors during SLO processing: %s", errors)
+        
+        logger.info("SLO processing completed, redirecting to frontend")
+        response = RedirectResponse(
+            url=FRONTEND_URL,
+            status_code=status.HTTP_303_SEE_OTHER
+        )
+        # Ensure cookie is deleted even if already deleted in /logout
+        response.delete_cookie(
+            key="session_id",
+            path="/",
+            secure=False,
+            httponly=True,
+            samesite="lax"
+        )
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error processing SLO: {str(e)}")
+        return RedirectResponse(
+            url=FRONTEND_URL,
+            status_code=status.HTTP_303_SEE_OTHER
+        )
