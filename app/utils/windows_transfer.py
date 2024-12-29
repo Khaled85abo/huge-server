@@ -6,9 +6,7 @@ from app.logging.logger import logger
 import time
 from app.websocket.connection_manager import manager
 from celery import shared_task
-from app.database.models.models import Job
-from app.db_setup import get_db
-from sqlalchemy.orm import Session
+from app.utils.update_job_status import update_job_status
 from app.db_setup import engine
 from app.database.models.models import JobStatus
 # Why read in chunks?
@@ -404,14 +402,7 @@ def create_progress_callback(user_id, total_bytes, current_file, start_time, byt
 #         db.query(Job).filter(Job.id == job_id).update({"status": status})
 #         db.commit()
         
-def update_job_status(job_id: int, status: str):
-    with Session(engine) as db:
-        job = db.query(Job).filter(Job.id == job_id).first()
-        if job:
-            job.status = status
-            db.commit()
-        else:
-            logger.error(f"Job with id {job_id} not found")
+
 # async def update_job_status(job_id: int, status: str, db: Session):
 #     db.query(Job).filter(Job.id == job_id).update({"status": status})
 #     db.commit()

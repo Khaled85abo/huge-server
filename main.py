@@ -18,13 +18,13 @@ import asyncio
 async def lifespan(app: FastAPI):
     # Startup: initialize database and start job monitor
     init_db()
-    # monitor_task = asyncio.create_task(job_monitor.start_monitoring())
+    monitor_task = asyncio.create_task(job_monitor.start_monitoring())
 
     yield  # Server is running
     
     # Shutdown: stop job monitor
-    # job_monitor.stop_monitoring()
-    # await monitor_task  # Wait for the monitoring task to complete
+    job_monitor.stop_monitoring()
+    await monitor_task  # Wait for the monitoring task to complete
 
 
 
