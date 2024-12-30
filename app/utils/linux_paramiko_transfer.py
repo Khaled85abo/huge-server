@@ -77,6 +77,12 @@ def linux_paramiko_transfer(self, transfer_data, server_configs, identity_file):
             raise Exception(f"Failed to create tar archive: {tar_error}")
         logger.info(f"Tar command output: {tar_output}")
 
+        # Verify tarball creation
+        stdin, stdout, stderr = source_ssh.exec_command(f"ls '{source_archive}'")
+        if stderr.read().decode():
+            logger.error(f"Tarball not found at {source_archive}")
+            raise Exception(f"Tarball not found at {source_archive}")
+
         # Determine size of the newly created tarball
         size_command = f"stat -c%s '{source_archive}'"
         logger.info(f"Getting archive size with command: {size_command}")
@@ -103,6 +109,22 @@ def linux_paramiko_transfer(self, transfer_data, server_configs, identity_file):
         dest_archive = f"{dest}/{Path(source_archive).name}"
         logger.info(f"Transferring tarball to destination: {dest_archive}")
 
+        # Verify destination path and create if it doesn't exist
+        mkdir_command = f"mkdir -p '{dest}'"
+        logger.info(f"Ensuring destination path exists with command: {mkdir_command}")
+        stdin, stdout, stderr = dest_ssh.exec_command(mkdir_command)
+        mkdir_error = stderr.read().decode()
+        if mkdir_error:
+            logger.error(f"Error creating destination directory: {mkdir_error}")
+            raise Exception(f"Failed to create destination directory: {mkdir_error}")
+
+        # Verify destination path
+        stdin, stdout, stderr = dest_ssh.exec_command(f"ls '{dest}'")
+        if stderr.read().decode():
+            logger.error(f"Destination path not found: {dest}")
+            # raise Exception(f"Destination path not found: {dest}")
+
+        logger.info(f"Transferring zip file to destination")
         with source_sftp.file(source_archive, 'rb') as sfh:
             with dest_sftp.file(dest_archive, 'wb') as dfh:
                 while True:
