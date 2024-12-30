@@ -150,7 +150,7 @@ def linux_paramiko_transfer(self, transfer_data, server_configs, identity_file):
                             'percent': progress
                         }
                     )
-                    time.sleep(0.2)  # Throttle updates slightly
+                    time.sleep(0.3)  # Throttle updates slightly
 
         # Close SFTP after the transfer
         source_sftp.close()
