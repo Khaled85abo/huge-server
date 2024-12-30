@@ -66,15 +66,18 @@ async def transfer_repository(request: TransferRequest, db: Session = Depends(ge
     }
 
     try:
+        print("platform",platform.system())
         # Check operating system and use appropriate transfer method
         task = None
         if platform.system() == 'Windows':
+            print("windows")
             logger.debug("Attempting to queue Windows transfer task")
             task = celery_app.send_task(
                 'transfer.windows',
                 args=[transfer_data, SERVER_CONFIGS, str(IDENTITY_FILE)]
             )                
         else:
+            print("linux")
             logger.debug("Attempting to queue Linux transfer task")
             task = celery_app.send_task(
                 'transfer.linux',
