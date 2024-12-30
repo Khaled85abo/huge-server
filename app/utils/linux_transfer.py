@@ -36,7 +36,10 @@ def linux_transfer(self, transfer_data, server_configs, identity_file):
         ]
         
         logger.info(f"Running tar command: {' '.join(tar_cmd)}")
-        subprocess.check_call(tar_cmd)
+        tar_process = subprocess.run(tar_cmd, capture_output=True, text=True)
+        if tar_process.returncode != 0:
+            logger.error(f"Tar command failed with error: {tar_process.stderr}")
+            raise HTTPException(status_code=500, detail=f"Tar command failed: {tar_process.stderr}")
 
         # Get total size for estimation
         size_cmd = [
@@ -49,8 +52,12 @@ def linux_transfer(self, transfer_data, server_configs, identity_file):
         ]
         
         logger.info(f"Running size command: {' '.join(size_cmd)}")
-        size_output = subprocess.check_output(size_cmd, text=True)
-        total_bytes = int(size_output.split()[0])
+        size_output = subprocess.run(size_cmd, capture_output=True, text=True)
+        if size_output.returncode != 0:
+            logger.error(f"Size command failed with error: {size_output.stderr}")
+            raise HTTPException(status_code=500, detail=f"Size command failed: {size_output.stderr}")
+
+        total_bytes = int(size_output.stdout.split()[0])
         logger.info(f"Total bytes: {total_bytes}")
 
         # Transfer the tarball using rsync
@@ -123,7 +130,10 @@ def linux_transfer(self, transfer_data, server_configs, identity_file):
                 f"tar -xzf {dest}/{source_archive} -C {dest}"
             ]
             logger.info(f"Running untar command: {' '.join(untar_cmd)}")
-            subprocess.check_call(untar_cmd)
+            untar_process = subprocess.run(untar_cmd, capture_output=True, text=True)
+            if untar_process.returncode != 0:
+                logger.error(f"Untar command failed with error: {untar_process.stderr}")
+                raise HTTPException(status_code=500, detail=f"Untar command failed: {untar_process.stderr}")
 
             # Clean up the tarball
             cleanup_cmd = [
@@ -135,7 +145,10 @@ def linux_transfer(self, transfer_data, server_configs, identity_file):
                 f"rm {dest}/{source_archive}"
             ]
             logger.info(f"Running cleanup command: {' '.join(cleanup_cmd)}")
-            subprocess.check_call(cleanup_cmd)
+            cleanup_process = subprocess.run(cleanup_cmd, capture_output=True, text=True)
+            if cleanup_process.returncode != 0:
+                logger.error(f"Cleanup command failed with error: {cleanup_process.stderr}")
+                raise HTTPException(status_code=500, detail=f"Cleanup command failed: {cleanup_process.stderr}")
 
             logger.info("Transfer completed successfully")
             update_job_status(transfer_data['job_id'], JobStatus.COMPLETED)
@@ -147,6 +160,7 @@ def linux_transfer(self, transfer_data, server_configs, identity_file):
             }
         else:
             error = process.stderr.read()
+            logger.error(f"Rsync command failed with error: {error}")
             update_job_status(transfer_data['job_id'], JobStatus.FAILED)
             raise HTTPException(status_code=500, detail=f"Transfer failed: {error}")
             
