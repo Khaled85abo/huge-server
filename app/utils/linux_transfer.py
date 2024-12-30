@@ -8,7 +8,7 @@ from app.database.models.models import JobStatus
 from app.utils.update_job_status import update_job_status
 
 @shared_task(name="transfer.linux", bind=True)
-async def linux_transfer(self, transfer_data, server_configs, identity_file):
+def linux_transfer(self, transfer_data, server_configs, identity_file):
     """Linux-specific implementation using subprocess"""
     try:
         update_job_status(transfer_data['job_id'], JobStatus.IN_PROGRESS)
