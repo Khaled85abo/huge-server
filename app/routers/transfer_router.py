@@ -80,7 +80,7 @@ async def transfer_repository(request: TransferRequest, db: Session = Depends(ge
             print("linux")
             logger.debug("Attempting to queue Linux transfer task")
             task = celery_app.send_task(
-                'transfer.linux',
+                'transfer.linux_paramiko',
                 args=[transfer_data, SERVER_CONFIGS, str(IDENTITY_FILE)]
             )    
         
