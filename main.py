@@ -9,14 +9,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.logging.logger import logger
 from typing import List, Dict
 from app.websocket.connection_manager import manager
-
+from app.utils.job_monitor import job_monitor
+import asyncio
 
 # Funktion som körs när vi startar FastAPI -
 # perfekt ställe att skapa en uppkoppling till en databas
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Startup: initialize database and start job monitor
     init_db()
-    yield
+    # monitor_task = asyncio.create_task(job_monitor.start_monitoring())
+
+    yield  # Server is running
+    
+    # Shutdown: stop job monitor
+    # job_monitor.stop_monitoring()
+    # await monitor_task  # Wait for the monitoring task to complete
 
 
 
@@ -48,15 +56,6 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(v1_router, prefix="/v1")
 # init_weaviate()
 
-# Workspace WebSocket endpoint (existing)
-@app.websocket("/v1/ws/workspace/{workspace_id}")
-async def workspace_websocket_endpoint(websocket: WebSocket, workspace_id: int):
-    try:
-        await manager.connect_to_workspace(websocket, workspace_id)
-        while True:
-            data = await websocket.receive_text()
-    except WebSocketDisconnect:
-        manager.disconnect_from_workspace(websocket, workspace_id)
 
 # New user notifications WebSocket endpoint
 @app.websocket("/v1/ws/user/{user_id}")
@@ -64,7 +63,11 @@ async def user_websocket_endpoint(websocket: WebSocket, user_id: int):
     try:
         await manager.connect_to_user(websocket, user_id)
         while True:
-            data = await websocket.receive_text()
+            # Receive job IDs to monitor
+            data = await websocket.receive_json()
+            # if data["type"] == "monitor_jobs":
+            #     job_ids = data["job_ids"]
+            #     # Start monitoring these jobs
+            #     asyncio.create_task(monitor_jobs(user_id, job_ids))
     except WebSocketDisconnect:
         manager.disconnect_from_user(websocket, user_id)
-

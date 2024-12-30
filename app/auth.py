@@ -2,11 +2,12 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 from app.db_setup import get_db
 from typing import Annotated
-from fastapi import Depends, FastAPI, HTTPException, status, APIRouter
+from fastapi import Depends, FastAPI, HTTPException, status, APIRouter, Cookie
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel
+from app.database.models.models import User, Session
 
 # to get a string like this run:
 # openssl rand -hex 32
@@ -70,7 +71,30 @@ async def get_user_id(token: Annotated[str, Depends(oauth2_scheme)]) -> int:
     user_id = decode_token(token)
     return user_id
 
+def get_current_user(
+    db: Session = Depends(get_db),
+    session_id: str = Cookie(None)
+):
+    if not session_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No session cookie")
 
+    session_record = db.query(Session).filter_by(session_id=session_id).first()
+    if not session_record:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
+
+    if session_record.expires_at < datetime.utcnow():
+        # Session expired, optionally delete it
+        db.delete(session_record)
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
+
+    # Fetch the user associated with the session if needed
+    user = db.query(User).filter_by(id=session_record.user_id).first()
+    if not user:
+        # If somehow user not found, handle error
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid user")
+
+    return user
 
 
 

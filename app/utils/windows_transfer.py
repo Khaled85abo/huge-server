@@ -5,22 +5,24 @@ import paramiko
 from app.logging.logger import logger
 import time
 from app.websocket.connection_manager import manager
-
-
-
+from celery import shared_task
+from app.utils.update_job_status import update_job_status
+from app.db_setup import engine
+from app.database.models.models import JobStatus
 # Why read in chunks?
 # - Windows is not as efficient with large file transfers
 # - Reading in chunks allows us to update the progress bar more frequently
 # - Reading in chunks allows us to handle errors more gracefully
-CHUNK_SIZES = {
+CHUNK_SIZE = {
     'small': 32768,
     'medium': 65536,
     'large': 131072
 }
-
-async def windows_transfer(transfer_data, server_configs, identity_file):
+@shared_task(name="transfer.windows", bind=True)
+def windows_tar_transfer(self, transfer_data, server_configs, identity_file):
     """Windows-specific implementation using paramiko"""
     try:
+        update_job_status(transfer_data['job_id'], JobStatus.IN_PROGRESS)
         logger.info(f"Starting windows transfer process with data: {transfer_data}")
         source = transfer_data['source_storage']
         dest = transfer_data['dest_storage']
@@ -108,13 +110,13 @@ async def windows_transfer(transfer_data, server_configs, identity_file):
         # dest_ssh.exec_command(mkdir_command)
 
         # Create progress callback for single file transfer
-        callback = create_progress_callback(
-            user_id=user_id,
-            total_bytes=total_bytes,
-            current_file=source_archive,
-            start_time=start_time,
-            bytes_transferred=bytes_transferred
-        )
+        # callback = create_progress_callback(
+        #     user_id=user_id,
+        #     total_bytes=total_bytes,
+        #     current_file=source_archive,
+        #     start_time=start_time,
+        #     bytes_transferred=bytes_transferred
+        # )
 
         # Transfer the zip file
         logger.info(f"Transferring zip file to destination")
@@ -122,12 +124,40 @@ async def windows_transfer(transfer_data, server_configs, identity_file):
             with source_sftp.file(source_archive, 'rb') as source_fh:
                 with dest_sftp.file(dest_archive, 'wb') as dest_fh:
                     while True:
-                        data = source_fh.read(CHUNK_SIZES['small'])
+                        data = source_fh.read(CHUNK_SIZE['small'])
                         if not data:
                             break
                         dest_fh.write(data)
-                        callback(len(data), total_bytes)
+                        bytes_transferred += len(data)
+                        
+                        # Report progress to Celery
+                        self.update_state(
+                            state=JobStatus.IN_PROGRESS,
+                            meta={
+                                'job_id': transfer_data['job_id'],
+                                'task_id': self.request.id,
+                                'user_id': user_id,
+                                'current': bytes_transferred,
+                                'total': total_bytes,
+                                'status': JobStatus.IN_PROGRESS,
+                                'percent': int((bytes_transferred / total_bytes) * 100)
+                            }
+                        )
+                        
+                        time.sleep(0.3)
+
+            self.update_state(
+                state=JobStatus.COMPLETED,
+                meta={
+                    'job_id': transfer_data['job_id'],
+                    'task_id': self.request.id,
+                    'user_id': user_id,
+                }
+            )
         except Exception as e:
+            # TODO: set the task_id to null
+            update_job_status(transfer_data['job_id'], JobStatus.FAILED)
+
             logger.error(f"Error transferring zip file: {str(e)}")
             raise
 
@@ -158,6 +188,144 @@ async def windows_transfer(transfer_data, server_configs, identity_file):
         cleanup_command = f"rm {source_archive}"
         source_ssh.exec_command(cleanup_command)
 
+        logger.info("All files transferred successfully")
+        
+        # Close connections
+        source_sftp.close()
+        dest_sftp.close()
+        source_ssh.close()
+        dest_ssh.close()
+        logger.info("All connections closed")
+        
+        # TODO: set the task_id to null
+        update_job_status(transfer_data['job_id'], JobStatus.COMPLETED)
+ 
+        
+    except Exception as e:
+        # TODO: set the task_id to null
+        update_job_status(transfer_data['job_id'], JobStatus.FAILED)
+        logger.error(f"Windows transfer failed with error: {str(e)}")
+        # manager.sync_broadcast_to_user(
+        #     user_id,
+        #     {
+        #         "type": "transfer_progress",
+        #         "progress": -1,
+        #         "error": str(e)
+        #     }
+        # )
+        raise Exception(f"Windows transfer failed: {str(e)}")
+    
+
+
+
+async def windows_files_transfer(transfer_data, server_configs, identity_file):
+    """Windows-specific implementation using paramiko"""
+    try:
+        logger.info(f"Starting windows transfer process with data: {transfer_data}")
+        source = transfer_data['source_storage']
+        dest = transfer_data['dest_storage']
+        user_id = transfer_data['user_id']
+        
+        # Initialize SSH connections for both servers
+        logger.info("Initializing SSH clients...")
+        source_ssh = paramiko.SSHClient()
+        dest_ssh = paramiko.SSHClient()
+        source_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        dest_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        
+        # Load private key
+        logger.info(f"Loading private key from: {identity_file}")
+        private_key = paramiko.RSAKey(filename=str(identity_file))
+        
+        # Connect to source server (pisms)
+        source_server = server_configs['pisms']
+        logger.info(f"Connecting to source server: {source_server['host']}")
+        source_ssh.connect(
+            source_server['host'],
+            username=source_server['user'],
+            pkey=private_key
+        )
+        logger.info("Successfully connected to source server")
+        
+        # Connect to destination server (pimaster)
+        dest_server = server_configs['pimaster']
+        logger.info(f"Connecting to destination server: {dest_server['host']}")
+        dest_ssh.connect(
+            dest_server['host'],
+            username=dest_server['user'],
+            pkey=private_key
+        )
+        logger.info("Successfully connected to destination server")
+        
+        # Setup SFTP connections
+        source_sftp = source_ssh.open_sftp()
+        dest_sftp = dest_ssh.open_sftp()
+        logger.info("SFTP connections established")
+        
+        # Get total size
+        size_command = f"du -sb {source}"
+        logger.info(f"Getting total size with command: {size_command}")
+        stdin, stdout, stderr = source_ssh.exec_command(size_command)
+        total_bytes = int(stdout.read().decode().split()[0])
+        logger.info(f"Total bytes to transfer: {total_bytes}")
+        
+        # Get list of files
+        find_command = f"find {source} -type f"
+        logger.info(f"Getting file list with command: {find_command}")
+        stdin, stdout, stderr = source_ssh.exec_command(find_command)
+        files_to_transfer = stdout.read().decode().split('\n')
+        files_to_transfer = [f for f in files_to_transfer if f]
+        logger.info(f"Found {len(files_to_transfer)} files to transfer")
+        
+        # Initialize transfer tracking
+        start_time = time.time()
+        bytes_transferred = 0
+        
+        for source_file in files_to_transfer:
+            # Calculate paths
+            rel_path = Path(source_file).relative_to(source)
+            dest_file = str(Path(dest) / rel_path).replace('\\', '/')
+            current_file = source_file
+            
+            logger.info(f"Processing file: {source_file} -> {dest_file}")
+            
+            # Create destination directory on dest server
+            dest_dir = str(Path(dest_file).parent).replace('\\', '/')
+            mkdir_command = f"mkdir -p {dest_dir}"
+            logger.info(f"Creating directory on destination: {mkdir_command}")
+            stdin, stdout, stderr = dest_ssh.exec_command(mkdir_command)
+            
+            # Get file size
+            file_attr = source_sftp.stat(source_file)
+            file_size = file_attr.st_size
+            logger.info(f"File size: {file_size} bytes")
+            
+            # Create progress callback
+            callback = create_progress_callback(
+                user_id=user_id,
+                total_bytes=total_bytes,
+                current_file=current_file,
+                start_time=start_time,
+                bytes_transferred=bytes_transferred
+            )
+            
+            # Transfer file from source to destination
+            logger.info(f"Starting transfer of: {source_file}")
+            try:
+                # Create a temporary file for transfer
+                with source_sftp.file(source_file, 'rb') as source_fh:
+                    with dest_sftp.file(dest_file, 'wb') as dest_fh:
+                        while True:
+                            data = source_fh.read(CHUNK_SIZE['small'])  # Read in 32KB chunks
+                            if not data:
+                                break
+                            dest_fh.write(data)
+                            callback(len(data), file_size)
+                logger.info(f"Successfully transferred: {source_file}")
+            except Exception as e:
+                logger.error(f"Error transferring {source_file}: {str(e)}")
+                raise
+        
         logger.info("All files transferred successfully")
         
         # Close connections
@@ -217,7 +385,7 @@ def create_progress_callback(user_id, total_bytes, current_file, start_time, byt
                 {
                     "type": "transfer_progress",
                     "progress": progress,
-                    "current_file": current_file,
+                    "job_id": 2,
                     "bytes_transferred": bytes_transferred,
                     "total_bytes": total_bytes,
                     "estimated_time_remaining": int(estimated_seconds),
@@ -227,3 +395,14 @@ def create_progress_callback(user_id, total_bytes, current_file, start_time, byt
         )
     
     return progress_callback
+
+
+# def update_job_status(job_id: int,  status: str):
+#     with Session(engine) as db:
+#         db.query(Job).filter(Job.id == job_id).update({"status": status})
+#         db.commit()
+        
+
+# async def update_job_status(job_id: int, status: str, db: Session):
+#     db.query(Job).filter(Job.id == job_id).update({"status": status})
+#     db.commit()

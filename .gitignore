@@ -3,6 +3,8 @@ __pycache__/
 .env
 venv
 test_venv
+db
+redis
 app/logging/app.log
 static/training_images/*
 static/training_urls/*

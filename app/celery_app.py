@@ -1,15 +1,22 @@
 from celery import Celery
 from kombu.utils.url import maybe_sanitize_url
+import os
 
 # Use separate Redis databases for broker and backend
-redis_broker_url = 'redis://localhost:6379/0'
-redis_backend_url = 'redis://localhost:6379/1'
+redis_broker_url = os.getenv('REDIS_BROKER_URL')
+redis_backend_url = os.getenv('REDIS_BACKEND_URL')
 
 celery_app = Celery(
-    'tasks',
+    'jobs',
     broker=redis_broker_url,
     backend=redis_backend_url
 )
+
+# Add this to explicitly include task modules
+celery_app.autodiscover_tasks([
+    'app.utils.windows_transfer',
+    'app.utils.linux_paramiko_transfer'
+])
 
 # Configure Celery
 celery_app.conf.update(
@@ -22,9 +29,7 @@ celery_app.conf.update(
     
     # Add ML worker configuration
     task_routes={
-        'train_yolo_model': {'queue': 'ml_training'},     # ML tasks
-        'process_resources.*': {'queue': 'default'},       # Resource processing tasks
-        'download_images.*': {'queue': 'default'},         # Image download tasks
+        'transfer.*': {'queue': 'default'},       # Resource processing tasks
         '*': {'queue': 'default'}   
     },
     # task_time_limit=14400,  # 4 hours max
@@ -72,3 +77,9 @@ print(f"Celery is configured with backend: {maybe_sanitize_url(celery_app.conf.r
 
 # the command to start celery manually
 # celery -A app.celery_app worker --pool=solo --loglevel=info
+
+# hight bebugging
+# celery -A app.celery_app worker --pool=solo -Q default --loglevel=debug
+
+# low bebugging
+#celery -A app.celery_app worker --pool=solo -Q default --loglevel=info
