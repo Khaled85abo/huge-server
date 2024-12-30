@@ -15,7 +15,7 @@ celery_app = Celery(
 # Add this to explicitly include task modules
 celery_app.autodiscover_tasks([
     'app.utils.windows_transfer',
-    'app.utils.linux_transfer'
+    'app.utils.linux_paramiko_transfer'
 ])
 
 # Configure Celery

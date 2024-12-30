@@ -12,12 +12,12 @@ RUN python -m venv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
 COPY ./cert /app/cert
 COPY ./app/identityFile/id_rsa /app/app/identityFile/id_rsa
-RUN chmod 600 /app/app/identityFile/id_rsa
 COPY requirements-linux.txt .
 
+COPY . .
+RUN chmod 600 /app/app/identityFile/id_rsa
 RUN pip install -r requirements-linux.txt
 
-COPY . .
 
 # Use uvicorn to run the FastAPI application
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

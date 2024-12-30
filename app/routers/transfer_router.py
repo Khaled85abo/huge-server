@@ -9,7 +9,7 @@ import re
 from app.logging.logger import logger
 import platform
 from app.utils.windows_transfer import windows_tar_transfer
-from app.utils.linux_transfer import linux_transfer
+from app.utils.linux_paramiko_transfer import linux_paramiko_transfer
 from app.db_setup import get_db
 from sqlalchemy.orm import Session
 from app.celery_app import celery_app
@@ -120,7 +120,7 @@ async def test_transfer_direct(request: TransferRequest, current_user: User = De
         if platform.system() == 'Windows':
             result = await windows_tar_transfer(transfer_data, SERVER_CONFIGS, IDENTITY_FILE)
         else:
-            result = await linux_transfer(transfer_data, SERVER_CONFIGS, IDENTITY_FILE)
+            result = await linux_paramiko_transfer(transfer_data, SERVER_CONFIGS, IDENTITY_FILE)
             
         return result
 

@@ -16,7 +16,7 @@ CHUNK_SIZE = {
 }
 
 @shared_task(name="transfer.linux_paramiko", bind=True)
-def linux_transfer(self, transfer_data, server_configs, identity_file):
+def linux_paramiko_transfer(self, transfer_data, server_configs, identity_file):
     """
     Linux-specific implementation using Paramiko (chunk-based transfer).
     This replaces the old subprocess/rsync approach.
