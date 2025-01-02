@@ -7,17 +7,15 @@ from app.logging.logger import logger
 
 class JobMonitor:
     def __init__(self):
-        self._current_job = None
         self._is_running = False
-        self._last_known_status = {}
-        self.job_id : int | None = None
+        self.current_job_id : int | None = None
+        self.current_user_id : int | None = None
 
-    async def _broadcast_job_completion(self, job_id: int):
+    async def _broadcast_job_completion(self, user_id: int):
         await manager.broadcast_to_user(
-            job_id,
+            user_id,
             {
                 "type": "job_completion",
-                "job_id": job_id,
                 "status": "SUCCESS"
             }
         )
@@ -32,28 +30,27 @@ class JobMonitor:
                     # Get all jobs that are in progress
                     active_jobs = db.query(Job).filter(Job.status == JobStatus.IN_PROGRESS).all()
 
-                    if len(active_jobs) == 0 and self.job_id is not None:
+                    if len(active_jobs) == 0 and self.current_job_id is not None:
                         # broadcast a job completion notification
-                        await self._broadcast_job_completion(self.job_id)
-                        self.job_id = None
+                        await self._broadcast_job_completion(self.current_user_id)
+                        self.current_job_id = None
+                        self.current_user_id = None
                     
                     for active_job in active_jobs:
                         if active_job.task_id:
-                            if self.job_id is None:
-                                self.job_id = active_job.id
-                            elif self.job_id != active_job.id:
+                            if self.current_job_id is None:
+                                self.current_job_id = active_job.id
+                                self.current_user_id = active_job.user_id
+                            elif self.current_job_id != active_job.id:
                                 # broadcast a job completion notification
-                                await self._broadcast_job_completion(self.job_id)
-                                self.job_id = active_job.id
-
+                                await self._broadcast_job_completion(active_job.user_id)
+                                self.current_job_id = active_job.id
+                                self.current_user_id = active_job.user_id
                             
                             result = AsyncResult(active_job.task_id)
                             status = result.status
                             
                             
-                            # Initialize or update the last known status and progress
-                            last_status = self._last_known_status.get(active_job.id, {}).get('status')
-                            last_progress = self._last_known_status.get(active_job.id, {}).get('progress', {})
                             
                             # Check if the status or progress has changed
                             progress_info = result.info if result.info else {}
@@ -63,28 +60,24 @@ class JobMonitor:
                                 "percent": progress_info.get('percent', 0)
                             }
                             
-                            if last_status != status or last_progress != current_progress:
-                                self._last_known_status[active_job.id] = {
-                                    'status': status,
-                                    'progress': current_progress
+
+                                
+                            update = {
+                                "job_id": active_job.id,
+                                "status": status,
+                                "task_id": active_job.task_id,
+                                **current_progress
+                            }
+                            
+                            
+                            # Broadcast to the job's owner
+                            await manager.broadcast_to_user(
+                                active_job.user_id,
+                                {
+                                    "type": "job_updates",
+                                    "updates": [update]
                                 }
-                                
-                                update = {
-                                    "job_id": active_job.id,
-                                    "status": status,
-                                    "task_id": active_job.task_id,
-                                    **current_progress
-                                }
-                                
-                                
-                                # Broadcast to the job's owner
-                                await manager.broadcast_to_user(
-                                    active_job.user_id,
-                                    {
-                                        "type": "job_updates",
-                                        "updates": [update]
-                                    }
-                                )
+                            )
                     
             except Exception as e:
                 logger.error(f"Error in job monitor: {str(e)}")
