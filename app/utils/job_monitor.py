@@ -44,7 +44,7 @@ class JobMonitor:
                             elif self.job_id != active_job.id:
                                 # broadcast a job completion notification
                                 await self._broadcast_job_completion(self.job_id)
-                                self.job_id = None
+                                self.job_id = active_job.id
 
                             
                             result = AsyncResult(active_job.task_id)
@@ -76,18 +76,6 @@ class JobMonitor:
                                     **current_progress
                                 }
                                 
-                                # Check if job is complete (SUCCESS or FAILURE)
-                                # if status in ['SUCCESS', 'FAILURE']:
-                                #     logger.info(f"Job {active_job.id} completed with status: {status}")
-                                #     # Send a job completion notification
-                                #     await manager.broadcast_to_user(
-                                #         active_job.user_id,
-                                #         {
-                                #             "type": "job_completion",
-                                #             "job_id": active_job.id,
-                                #             "status": status
-                                #         }
-                                #     )
                                 
                                 # Broadcast to the job's owner
                                 await manager.broadcast_to_user(
